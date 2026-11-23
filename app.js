@@ -284,6 +284,7 @@ export function entryTitle(e) {
     case "bill": return name + ": " + optLabel(FORMS.bill.fields[0].opts, e.kind) + ", " + money(e.amount);
     case "salaryPaid": return name + ": " + money(e.amount);
     case "spentBefore": return name + ": " + optLabel(FORMS.spentBefore.fields[0].opts, e.section) + ", " + money(e.amount);
+    case "oldSpend": return name + ": " + (e.what || "old equipment") + ", " + money(e.amount);
     case "health": return name + ": " + optLabel(FORMS.health.fields[0].opts, e.group) + ", " + e.what + (e.cost != null ? ", " + money(e.cost) : "");
     case "incubatorBatch": return name + ": " + e.eggs + " eggs from group " + e.group + (e.clear ? ", " + e.clear + " clear" : "");
     default: return name;
@@ -911,6 +912,12 @@ Object.assign(FORMS, {
     { k: "section", l: "Which section", t: "select", req: true, opts: [["chickens", "Chickens"], ["incubators", "Incubators"], ["pigeons", "Pigeons"], ["rabbits", "Rabbits"], ["tilapia", "Fish pond"], ["figs", "Figs"], ["ro", "RO machine"], ["farm", "Farm general"]] },
     { k: "amount", l: "Total spent", t: "number", step: "0.01", req: true },
   ] },
+  // Old farm equipment (greenhouses, generator, RO machine, pumps): written down only,
+  // never counted in profit, payback or the goal steps.
+  oldSpend: { title: "Old farm spending (not counted)", icon: "coin", section: "old", fields: [
+    { k: "what", l: "What was it", t: "text", req: true },
+    { k: "amount", l: "Amount", t: "number", step: "0.01", req: true },
+  ] },
   incubatorBatch: { title: "Incubator batch", icon: "egg", section: "incubators", fields: [
     { k: "incubator", l: "Which incubator", t: "select", req: true, opts: [["128", "128 eggs"], ["400", "400 eggs"]] },
     { k: "eggs", l: "How many eggs set", t: "number", req: true },
@@ -984,10 +991,14 @@ view("setup", async () => {
   form.append(el("<h3>Spent before 22 Nov 2026</h3>"));
   form.append(el('<p class="hint">Kept apart and used only for payback. Leave 0 if nothing.</p>'));
   const spent = {};
-  for (const [id, label] of [["chickens", "Chickens"], ["incubators", "Incubators"], ["pigeons", "Pigeons"], ["rabbits", "Rabbits"], ["tilapia", "Fish pond"], ["figs", "Figs"], ["ro", "RO machine"], ["farm", "Farm general"]]) {
+  for (const [id, label] of [["chickens", "Chickens"], ["incubators", "Incubators"], ["pigeons", "Pigeons"], ["rabbits", "Rabbits"], ["tilapia", "Fish pond"], ["figs", "Figs"]]) {
     spent[id] = 0;
     addNum(spent, id, "Spent on " + label, "0.01");
   }
+  form.append(el("<h3>Old farm spending (not counted)</h3>"));
+  form.append(el('<p class="hint">Greenhouses, generator, RO machine, pumps. Written down for your records only: never counted in profit, payback or your goal.</p>'));
+  const old = { oldTotal: 0 };
+  addNum(old, "oldTotal", "Old farm equipment, total", "0.01");
 
   const msg = el('<p class="hint" aria-live="polite"></p>');
   form.append(el('<button class="btn primary block" type="submit">Save and start</button>'), msg);
@@ -1001,6 +1012,7 @@ view("setup", async () => {
       for (const [id, amount] of Object.entries(spent)) {
         if (amount > 0) await store.addEntry({ type: "spentBefore", section: id, amount, date: "2026-11-21", note: "Spent before 22 Nov" });
       }
+      if (old.oldTotal > 0) await store.addEntry({ type: "oldSpend", section: "old", what: "Old farm equipment", amount: old.oldTotal, date: "2026-11-21", note: "Not counted" });
       toast("Farm set up");
       location.hash = "#/home";
       render();
@@ -1137,6 +1149,10 @@ view("summary", async () => {
     table.append(el(`<p class="hint">Home value ${money(r.home)} · total benefit ${money(r.benefit)}</p>`));
   }
   box.append(table);
+  const oldTotal = data.entries.filter((e) => e.type === "oldSpend").reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  if (oldTotal > 0) {
+    box.append(el(`<div class="card stack"><h3>Old farm spending</h3><div class="spread"><span>Greenhouses, generator, RO machine, pumps</span><span>${money(oldTotal)}</span></div><p class="hint">For your records only. Not counted in profit, payback or your goal.</p></div>`));
+  }
 
   if (sum.best) {
     const bw = el('<div class="card stack"><h3>Best and worst</h3></div>');
