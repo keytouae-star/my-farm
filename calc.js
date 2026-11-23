@@ -42,6 +42,109 @@ export function fertilizerPerMonth({ amounts = [] }) {
   return round2(total / 12);
 }
 
+// F11: shared costs reach the animals. Returns a NEW entries list for the stats only;
+// the original entries stay as they are for the Entries list and Excel "Entries" sheet.
+const monthOf = (iso) => String(iso || "").slice(0, 7);
+const pad2 = (n) => String(n).padStart(2, "0");
+function addMonths(key, n) {
+  const [y, m] = key.split("-").map(Number);
+  const i = y * 12 + (m - 1) + n;
+  return Math.floor(i / 12) + "-" + pad2((i % 12) + 1);
+}
+const nowMonth = (now) => now.getFullYear() + "-" + pad2(now.getMonth() + 1);
+
+// Head counts as they are now, used for every month (F11).
+export function headCounts(counts = {}) {
+  const ch = counts.chickens || {};
+  const chickens = Object.values(ch.groups || {}).reduce((a, g) => a + (Number(g.roosters) || 0) + (Number(g.hens) || 0), 0);
+  const ck = counts.chicks || {};
+  const chicks = (Number(ck.starter) || 0) + (Number(ck.grower) || 0) + (Number(ck.males) || 0) + (Number(ck.females) || 0);
+  const p = counts.pigeons || {};
+  const pigeons = (Number(p.males) || 0) + (Number(p.females) || 0) + (Number(p.young) || 0) + (Number(p.flying) || 0);
+  const r = counts.rabbits || {};
+  const rabbits = (Number(r.males) || 0) + (Number(r.females) || 0) + (Number(r.young) || 0);
+  return { chickens, chicks, pigeons, rabbits };
+}
+
+export function allocateShared({ entries = [], settings = {}, counts = {}, now = new Date() }) {
+  const splits = settings.splits || {};
+  const elec = splits.electricity || {};
+  const lab = splits.labour || {};
+  const figShare = Number(splits.roFigShare) || 0;
+  const salary = Number(settings.salary) || 0;
+  const heads = headCounts(counts);
+  const ducks = Number((counts.ducks || {}).count) || 0;
+  const out = [];
+  const labourPool = {};
+  const roPool = {};
+  const push = (section, amount, date, from) => {
+    const amt = round2(amount);
+    if (amt > 0) out.push({ type: "share", section, amount: amt, date, from });
+  };
+  const add = (pool, month, amount) => { if (amount) pool[month] = (pool[month] || 0) + amount; };
+
+  for (const e of entries) {
+    const month = monthOf(e.date);
+    if (e.type === "bill" && e.kind === "electricity") {
+      const amt = Number(e.amount) || 0;
+      const inc = round2(amt * ((Number(elec.incubator) || 0) / 100));
+      const ro = round2(amt * ((Number(elec.ro) || 0) / 100));
+      const house = round2(amt * ((Number(elec.house) || 0) / 100));
+      const other = round2(amt * ((Number(elec.other) || 0) / 100));
+      push("incubators", inc, e.date, "electricity:incubator");
+      push("farm", other, e.date, "electricity:other");
+      push("farm", round2(amt - inc - ro - house - other), e.date, "electricity:leftover");
+      add(roPool, month, ro);
+      add(labourPool, month, house);
+    } else if (e.type === "bill" && e.kind === "ro") {
+      add(roPool, month, Number(e.amount) || 0);
+    } else if (e.type === "bought" && (e.what === "roFilters" || e.what === "roChemicals")) {
+      add(roPool, month, Number(e.price) || 0);
+    } else if (e.type === "bought" && e.what === "layer") {
+      const parts = splitLayerFeed({ amount: Number(e.price) || 0, chickens: heads.chickens, pigeons: heads.pigeons, ducks });
+      push("chickens", parts.chickens, e.date, "layer feed");
+      push("pigeons", parts.pigeons, e.date, "layer feed");
+      push("ducks", parts.ducks, e.date, "layer feed");
+    } else if (e.type === "bought" && (e.what === "fertilizer" || e.what === "spray")) {
+      const per = round2((Number(e.price) || 0) / 12);
+      for (let i = 0; i < 12; i++) push("figs", per, addMonths(month, i) + "-01", e.what);
+    } else {
+      out.push(e);
+    }
+  }
+
+  // Salary: one labour pool a month, from the first entry's month to now.
+  const dated = entries.map((e) => e.date).filter(Boolean).sort();
+  const first = dated.length ? monthOf(dated[0]) : null;
+  if (first && salary) {
+    const last = nowMonth(now);
+    const end = first > last ? first : last;
+    let m = first;
+    while (m <= end) { add(labourPool, m, salary); m = addMonths(m, 1); }
+  }
+
+  // Labour pool (salary + the house share of electricity), split by the labour %.
+  // "other" and anything the boxes leave over stay under Farm general.
+  for (const [month, pool] of Object.entries(labourPool)) {
+    if (!pool) continue;
+    let used = 0;
+    for (const key of ["chickens", "chicks", "pigeons", "rabbits", "figs", "tilapia"]) {
+      const amt = round2(pool * ((Number(lab[key]) || 0) / 100));
+      if (amt > 0) { push(key, amt, month + "-01", "labour"); used += amt; }
+    }
+    push("farm", round2(pool - used), month + "-01", "labour:other");
+  }
+
+  // RO pool (RO bills + filters and chemicals + the RO electricity share).
+  for (const [month, pool] of Object.entries(roPool)) {
+    if (!pool) continue;
+    const split = splitRO({ amount: pool, figShare, heads });
+    push("figs", split.figs, month + "-01", "ro:figs");
+    for (const [key, amt] of Object.entries(split.shares)) push(key, amt, month + "-01", "ro:heads");
+  }
+  return out;
+}
+
 // PLAN §5: cost per unit = all costs of the section ÷ all units produced
 // (including those used at home, thrown away or died).
 export function costPerUnit({ costs = 0, units = 0 }) {
@@ -154,12 +257,13 @@ export function goalSteps({ monthCash = 0, profitToDate = 0, startBehind = 0, to
 // PLAN §5 and §6: one section's numbers for a period, from its entries.
 export function sectionStats({ entries = [], section, settings = {}, shopPrices = {}, counts = null }) {
   const rows = entries.filter((e) => (e.section || "farm") === section);
+  const realRows = rows.filter((e) => e.type !== "share");
   let sales = 0, costs = 0, home = 0, died = 0, eggs = 0;
   const byKind = {};
   const bump = (kind, n) => { byKind[kind] = (byKind[kind] || 0) + (Number(n) || 0); };
-  const months = new Set();
+  const months = new Set(realRows.map((e) => (e.date || "").slice(0, 7)).filter(Boolean));
   for (const e of rows) {
-    months.add((e.date || "").slice(0, 7));
+    if (e.type === "share") costs += Number(e.amount) || 0;
     if (e.type === "sold") { sales += Number(e.price) || 0; bump(e.what || "bird", e.count); }
     if (e.type === "bought") costs += Number(e.price) || 0;
     if (e.type === "bill") costs += Number(e.amount) || 0;
@@ -190,10 +294,10 @@ export function sectionStats({ entries = [], section, settings = {}, shopPrices 
     costByKind[kind] = denom ? round2(costs / denom) : 0;
   }
   const perUnit = mainKind ? costByKind[mainKind] : 0;
-  const first = rows.map((e) => e.date).filter(Boolean).sort()[0];
+  const first = realRows.map((e) => e.date).filter(Boolean).sort()[0];
   const monthCount = months.size;
   return {
-    section, entries: rows.length, sales: round2(sales), costs: round2(costs), home: homeVal,
+    section, entries: realRows.length, sales: round2(sales), costs: round2(costs), home: homeVal,
     cash, benefit: round2(cash + homeVal), units, unitsByKind: byKind, mainKind, costByKind,
     died, eggs, costPerUnit: perUnit,
     months: monthCount, weeks: weeksBasedOn(first),
@@ -345,6 +449,7 @@ export function monthlyBySection(entries) {
     const cell = out[month][section];
     if (e.type === "sold") cell.sales += Number(e.price) || 0;
     if (e.type === "bought" || e.type === "bill" || e.type === "health") cell.costs += Number(e.price ?? e.amount ?? e.cost) || 0;
+    if (e.type === "share") cell.costs += Number(e.amount) || 0;
     if (e.type === "home") cell.home += 1;
   }
   for (const month of Object.keys(out)) {

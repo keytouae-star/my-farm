@@ -508,11 +508,23 @@ function homePrices(settings) {
   return out;
 }
 
-function allStats(data) {
+// Every section shown in totals, plus "Farm general" for shared costs not split to an animal
+// (the labour % left over, "other" electricity). It is never saved to the sections doc.
+function sectionIds(data) {
+  return Object.keys(data.sections).filter((id) => id !== "ducks" && id !== "farm").concat("farm");
+}
+function sectionName(data, id) {
+  return (data.sections[id] && data.sections[id].name) || (id === "farm" ? "Farm general" : id);
+}
+
+function allocatedEntries(data) {
+  return calc.allocateShared({ entries: data.entries, settings: data.settings, counts: data.sections, now: new Date() });
+}
+
+function allStats(data, allocated = allocatedEntries(data)) {
   const prices = homePrices(data.settings);
-  return Object.keys(data.sections)
-    .filter((id) => id !== "ducks")
-    .map((id) => calc.sectionStats({ entries: data.entries, section: id, shopPrices: prices, counts: data.sections[id] }));
+  return sectionIds(data)
+    .map((id) => calc.sectionStats({ entries: allocated, section: id, shopPrices: prices, counts: data.sections[id] }));
 }
 
 function thisMonth(entries) {
@@ -533,8 +545,9 @@ view("home", async () => {
     location.hash = "#/setup";
     return el('<div class="card"><p class="hint">Setting up…</p></div>');
   }
-  const stats = allStats(data);
-  const month = thisMonth(data.entries);
+  const allocated = allocatedEntries(data);
+  const stats = allStats(data, allocated);
+  const month = thisMonth(allocated);
   const prices = homePrices(data.settings);
   const monthStats = stats.map((s) => calc.sectionStats({ entries: month, section: s.section, shopPrices: prices, counts: data.sections[s.section] }));
   const startBehind = data.entries.filter((e) => e.type === "spentBefore").reduce((a, e) => a + (Number(e.amount) || 0), 0);
@@ -581,12 +594,12 @@ view("home", async () => {
   for (const s of stats) {
     const m = monthStats.find((x) => x.section === s.section);
     const card = el(`
-      <a class="card" href="#/section/${s.section}" style="text-decoration:none;color:inherit">
+      <a class="card" href="${s.section === "farm" ? "#/summary" : "#/section/" + s.section}" style="text-decoration:none;color:inherit">
         <div class="card-head"><h3></h3><span data-badge></span></div>
         <div class="spread"><span class="hint">Cash this month</span><span class="big-num" data-cash></span></div>
         <p class="hint" data-sub></p>
       </a>`);
-    card.querySelector("h3").textContent = data.sections[s.section].name || s.section;
+    card.querySelector("h3").textContent = sectionName(data, s.section);
     card.querySelector("[data-badge]").replaceWith(badgeEl(s.badge));
     card.querySelector("[data-cash]").textContent = money(m ? m.cash : 0);
     card.querySelector("[data-sub]").textContent = s.entries
@@ -623,11 +636,12 @@ function countLines(id, sec) {
 
 view("section", async (id) => {
   const data = await loadAll();
-  const sec = data.sections[id];
+  const sec = data.sections[id] || (id === "farm" ? { name: "Farm general" } : undefined);
   if (!sec) return el('<div class="card"><h2>No such section</h2></div>');
   const prices = homePrices(data.settings);
-  const s = calc.sectionStats({ entries: data.entries, section: id, shopPrices: prices, counts: sec });
-  const month = calc.sectionStats({ entries: thisMonth(data.entries), section: id, shopPrices: prices, counts: sec });
+  const allocated = allocatedEntries(data);
+  const s = calc.sectionStats({ entries: allocated, section: id, shopPrices: prices, counts: sec });
+  const month = calc.sectionStats({ entries: thisMonth(allocated), section: id, shopPrices: prices, counts: sec });
   const margin = id === "figs" ? data.settings.margins.figs : data.settings.margins.liveAnimals;
   const suggested = calc.suggestedPrice({ cost: s.costPerUnit, marginPct: margin });
   const lpKey = id === "pigeons" ? "pigeon" : "rooster";
@@ -787,6 +801,23 @@ function getPath(obj, path) {
   return path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
 }
 
+// F13: an amber line when a set of % boxes does not add up to 100. Display only:
+// the stored numbers are never changed.
+function pctWarn(label, inputs) {
+  const p = el('<p class="hint" style="color:var(--amber)" aria-live="polite"></p>');
+  const update = () => {
+    const total = inputs.reduce((a, i) => a + (Number(i.value) || 0), 0);
+    const left = calc.round1(100 - total);
+    if (Math.abs(left) < 0.05) { p.hidden = true; p.textContent = ""; return; }
+    p.hidden = false;
+    p.textContent = label + " adds up to " + calc.round1(total) + "%. " +
+      (left > 0 ? "The other " + left + "% stays under Farm general." : "That is " + Math.abs(left) + "% more than the whole bill.");
+  };
+  for (const i of inputs) i.addEventListener("input", update);
+  update();
+  return p;
+}
+
 view("settings", async () => {
   const data = await loadAll();
   const s = data.settings;
@@ -800,7 +831,7 @@ view("settings", async () => {
       ["splits.electricity.ro", "RO machine"],
       ["splits.electricity.house", "Worker's house"],
       ["splits.electricity.other", "Other"],
-    ]],
+    ], "Electricity"],
     ["RO water %", [["splits.roFigShare", "Fig trees get"]]],
     ["Labour %", [
       ["splits.labour.chickens", "Chickens"],
@@ -808,8 +839,9 @@ view("settings", async () => {
       ["splits.labour.pigeons", "Pigeons"],
       ["splits.labour.rabbits", "Rabbits"],
       ["splits.labour.figs", "Figs"],
+      ["splits.labour.tilapia", "Fish pond"],
       ["splits.labour.other", "Other"],
-    ]],
+    ], "Labour"],
     ["Margins %", [["margins.figs", "Figs"], ["margins.liveAnimals", "Live animals"]]],
     ["Local prices (AED)", [["localPrices.rooster.low", "Rooster low"], ["localPrices.rooster.high", "Rooster high"], ["localPrices.pigeon.low", "Pigeon low"], ["localPrices.pigeon.high", "Pigeon high"]]],
     ["Shop prices for home use", [["shopPrices.egg", "One egg"], ["shopPrices.figKg", "Fig per kg"], ["shopPrices.roosterKg", "Rooster per kg"], ["shopPrices.pigeon", "One pigeon"], ["shopPrices.rabbit", "One rabbit"], ["shopPrices.tilapiaKg", "Tilapia per kg"]]],
@@ -817,8 +849,9 @@ view("settings", async () => {
     ["Money and ages", [["salary", "Salary per month"], ["stageAges.starterWeeks", "Starter stage (weeks)"], ["stageAges.growerWeeks", "Grower stage (weeks)"]]],
   ];
   const inputs = [];
-  for (const [title, fields] of groups) {
+  for (const [title, fields, warnLabel] of groups) {
     form.append(el(`<h3>${title}</h3>`));
+    const groupIns = [];
     for (const [path, label] of fields) {
       const wrap = el('<div class="field"></div>');
       wrap.append(el(`<label for="s_${path}">${label}</label>`));
@@ -827,7 +860,9 @@ view("settings", async () => {
       wrap.append(inp);
       form.append(wrap);
       inputs.push([path, inp]);
+      groupIns.push(inp);
     }
+    if (warnLabel) form.append(pctWarn(warnLabel, groupIns));
   }
   const msg = el('<p class="hint" aria-live="polite"></p>');
   const save = el('<button class="btn primary block" type="submit">Save settings</button>');
@@ -951,6 +986,7 @@ view("setup", async () => {
     wrap.append(inp);
     form.append(wrap);
     inputs.push([target, path, inp]);
+    return inp;
   };
 
   form.append(el("<h3>Animal counts</h3>"));
@@ -970,16 +1006,23 @@ view("setup", async () => {
   addNum(sec.incubators, "onHold", "Eggs in the incubator on hold");
 
   form.append(el("<h3>Your % splits</h3>"));
-  addNum(set, "splits.electricity.incubator", "Electricity: incubator %");
-  addNum(set, "splits.electricity.ro", "Electricity: RO machine %");
-  addNum(set, "splits.electricity.house", "Electricity: worker's house %");
-  addNum(set, "splits.electricity.other", "Electricity: other %");
+  const elecIns = [
+    addNum(set, "splits.electricity.incubator", "Electricity: incubator %"),
+    addNum(set, "splits.electricity.ro", "Electricity: RO machine %"),
+    addNum(set, "splits.electricity.house", "Electricity: worker's house %"),
+    addNum(set, "splits.electricity.other", "Electricity: other %"),
+  ];
+  form.append(pctWarn("Electricity", elecIns));
   addNum(set, "splits.roFigShare", "RO water: fig trees get %");
-  addNum(set, "splits.labour.chickens", "Labour: chickens %");
-  addNum(set, "splits.labour.chicks", "Labour: chicks %");
-  addNum(set, "splits.labour.pigeons", "Labour: pigeons %");
-  addNum(set, "splits.labour.rabbits", "Labour: rabbits %");
-  addNum(set, "splits.labour.figs", "Labour: figs %");
+  const labIns = [
+    addNum(set, "splits.labour.chickens", "Labour: chickens %"),
+    addNum(set, "splits.labour.chicks", "Labour: chicks %"),
+    addNum(set, "splits.labour.pigeons", "Labour: pigeons %"),
+    addNum(set, "splits.labour.rabbits", "Labour: rabbits %"),
+    addNum(set, "splits.labour.figs", "Labour: figs %"),
+    addNum(set, "splits.labour.tilapia", "Labour: fish pond %"),
+  ];
+  form.append(pctWarn("Labour", labIns));
 
   form.append(el("<h3>Money</h3>"));
   addNum(set, "salary", "Salary per month", "0.01");
@@ -1036,7 +1079,7 @@ view("incubators", async () => {
   const data = await loadAll();
   const sec = data.sections.incubators || {};
   const prices = homePrices(data.settings);
-  const chickens = calc.sectionStats({ entries: data.entries, section: "chickens", shopPrices: prices, counts: data.sections.chickens });
+  const chickens = calc.sectionStats({ entries: allocatedEntries(data), section: "chickens", shopPrices: prices, counts: data.sections.chickens });
   const costPerEgg = chickens.costByKind.eggs || 0;
   const log = calc.eggLog({ entries: data.entries, counts: data.sections.chickens });
   const eggsPerDay = log.reduce((a, r) => a + r.perDay, 0);
@@ -1129,12 +1172,13 @@ view("ducks", async () => {
 view("summary", async () => {
   const data = await loadAll();
   const month = today().slice(0, 7);
-  const rows = data.entries.filter((e) => (e.date || "").startsWith(month));
+  const allocated = allocatedEntries(data);
+  const rows = allocated.filter((e) => (e.date || "").startsWith(month));
   const prices = homePrices(data.settings);
-  const stats = Object.keys(data.sections).filter((id) => id !== "ducks")
+  const stats = sectionIds(data)
     .map((id) => calc.sectionStats({ entries: rows, section: id, shopPrices: prices, counts: data.sections[id] }));
   const sum = calc.monthlySummary({ stats });
-  const everySection = allStats(data);
+  const everySection = allStats(data, allocated);
   const startBehind = data.entries.filter((e) => e.type === "spentBefore").reduce((a, e) => a + (Number(e.amount) || 0), 0);
   const profitToDate = everySection.reduce((a, s) => a + s.cash, 0);
   const pay = calc.payback({ behind: Math.max(0, startBehind - profitToDate), profitPerMonth: Math.max(0, sum.rows.reduce((a, r) => a + r.cash, 0)) });
@@ -1145,7 +1189,7 @@ view("summary", async () => {
   const table = el('<div class="card stack"><h3>This month</h3></div>');
   if (!sum.rows.length) table.append(el('<p class="hint">No entries this month yet.</p>'));
   for (const r of sum.rows) {
-    table.append(el(`<div class="spread"><span>${(data.sections[r.section] && data.sections[r.section].name) || r.section}</span><span>${money(r.cash)}</span></div>`));
+    table.append(el(`<div class="spread"><span>${sectionName(data, r.section)}</span><span>${money(r.cash)}</span></div>`));
     table.append(el(`<p class="hint">Home value ${money(r.home)} · total benefit ${money(r.benefit)}</p>`));
   }
   box.append(table);
@@ -1192,7 +1236,7 @@ async function downloadExcel() {
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Entries");
   const monthly = [];
-  const byMonth = calc.monthlyBySection(data.entries);
+  const byMonth = calc.monthlyBySection(calc.allocateShared({ entries: data.entries, settings: data.settings, counts: data.sections, now: new Date() }));
   for (const [month, sections] of Object.entries(byMonth)) {
     for (const [section, cell] of Object.entries(sections)) {
       monthly.push({ Month: month, Section: section, Sales: cell.sales, Costs: cell.costs, Cash: cell.cash });
