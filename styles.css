@@ -84,6 +84,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 14px 24px; display: grid;
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.small { min-height: 40px; padding: 6px 14px; font-size: .9rem; }
 .btn.block { width: 100%; }
+.btn.todo { justify-content: flex-start; text-align: left; min-height: 46px; padding: 8px 14px; border-color: var(--line); background: var(--surface); color: var(--olive); }
 
 /* Worker picture buttons */
 .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }

@@ -556,7 +556,7 @@ view("w/today", async () => {
     const card = el('<div class="card stack"><h3>Still to do today</h3></div>');
     if (!todo.length) card.append(el('<p>✓ All done for today. Thank you!</p>'));
     for (const [href, label] of todo) {
-      const a = el(`<a class="btn block quiet" href="${href}" style="text-align:left"></a>`);
+      const a = el(`<a class="btn block todo" href="${href}"></a>`);
       a.textContent = "○ " + label;
       card.append(a);
     }
@@ -714,7 +714,7 @@ view("home", async () => {
   if (todo.length) {
     const card = el('<div class="card stack"><h3>To do</h3><p class="hint">Until these are done, the costs look lower than they are.</p></div>');
     for (const [href, label] of todo) {
-      const a = el(`<a class="btn block quiet" href="${href}" style="text-align:left"></a>`);
+      const a = el(`<a class="btn block todo" href="${href}"></a>`);
       a.textContent = "○ " + label;
       card.append(a);
     }
