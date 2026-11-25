@@ -200,14 +200,18 @@ async function boot() {
   await store.initStore();
   document.getElementById("demoBand").hidden = !store.isDemo();
   me = await store.currentUser();
+  booted = true;
   if (me) enter();
   else {
-    if (!location.hash || location.hash === "#/") location.hash = "#/login";
+    // Not logged in: always the login page (a saved link to another page would only show an error).
+    if (location.hash !== "#/login") location.hash = "#/login";
     render();
   }
 }
 
-window.addEventListener("hashchange", render);
+// Until boot knows who is logged in, a hash change must not draw a page (it would say "Please log in first").
+let booted = false;
+window.addEventListener("hashchange", () => { if (booted) render(); });
 
 // ---- entry types and their small forms ----
 
@@ -1184,8 +1188,13 @@ view("incubators", async () => {
   const sec = data.sections.incubators || {};
   const prices = homePrices(data.settings);
   const chickens = calc.sectionStats({ entries: allocatedEntries(data), section: "chickens", shopPrices: prices, counts: data.sections.chickens });
-  const costPerEgg = chickens.costByKind.eggs || 0;
-  const log = calc.eggLog({ entries: data.entries, counts: data.sections.chickens });
+  // An egg from your own hens is worth what it cost to lay. Until a week of daily egg entries
+  // exists that figure is not reliable (few eggs carry all the costs), so the shop price is used.
+  const eggDays = new Set(data.entries.filter((e) => e.type === "eggs").map((e) => e.date)).size;
+  const realEggCost = chickens.costByKind.eggs || 0;
+  const useShop = eggDays < 7 || !realEggCost;
+  const costPerEgg = useShop ? prices.eggs || 0 : realEggCost;
+  const log =calc.eggLog({ entries: data.entries, counts: data.sections.chickens });
   const eggsPerDay = log.reduce((a, r) => a + r.perDay, 0);
   const layingHens = log.reduce((a, r) => a + r.hens, 0);
   const perHen = calc.eggsPerHenPerDay({ eggsPerDay, hens: layingHens }) || 0.6;
@@ -1204,12 +1213,18 @@ view("incubators", async () => {
   const batches = data.entries.filter((e) => e.type === "incubatorBatch");
   const batchCard = el('<div class="card stack"><h3>Batches</h3></div>');
   if (!batches.length) batchCard.append(el('<p class="hint">No batch yet. Add one from Add entry → Incubator batch.</p>'));
+  else batchCard.append(el('<p class="hint">Batch cost = the eggs (your hens\' feed and care) + the incubator\'s electricity for 21 days + chick feed after hatching. It is what each chick costs you, not money spent on the incubator.</p>'));
   for (const b of batches) {
-    const st = calc.batchStats({ batch: b, entries: data.entries, costPerEgg, incubatorElectric: electric });
+    // A batch runs 21 days (about 0.7 of a month). Batches set the same day in the same incubator share it by eggs.
+    const same = batches.filter((x) => x.date === b.date && x.incubator === b.incubator);
+    const sameEggs = same.reduce((a, x) => a + (Number(x.eggs) || 0), 0) || 1;
+    const myElectric = electric * (21 / 30) * ((Number(b.eggs) || 0) / sameEggs);
+    const st = calc.batchStats({ batch: b, entries: data.entries, costPerEgg, incubatorElectric: myElectric });
     batchCard.append(el(`<div class="stack" style="gap:2px">
-      <p><strong>${b.eggs} eggs from group ${b.group}</strong> · ${dayMonthYear(b.date)}</p>
+      <p><strong>${b.eggs} eggs from group ${b.group}</strong> · ${b.incubator || "?"} incubator · ${dayMonthYear(b.date)}</p>
       <p class="hint">Clear at candling: ${b.clear || 0} · hatched: ${st.hatched} · hatch rate ${st.hatchRate}%</p>
-      <p class="hint">Cost per chick: ${st.costPerChick ? money(st.costPerChick) : "no chicks yet"} (batch cost ${money(st.cost)})</p>
+      <p class="hint">Batch cost ${money(st.cost)} = eggs ${money(st.eggsCost)} (${b.eggs} × ${money(costPerEgg)}${useShop ? ", shop price until 7 days of egg entries" : ""}) + electricity ${money(st.electric)} + chick feed ${money(st.feed)}</p>
+      <p class="hint">Cost per chick: ${st.costPerChick ? money(st.costPerChick) : "no chicks yet"}</p>
     </div>`));
   }
   box.append(batchCard);

@@ -402,6 +402,10 @@ export function batchStats({ batch = {}, entries = [], costPerEgg = 0, incubator
     .filter((e) => e.type === "incubatorBatch" && e !== batch && (e.date || "") > start)
     .map((e) => e.date).sort()[0];
   const inBatch = (e) => (e.date || "") >= start && (!next || (e.date || "") < next);
+  // Batches set on the same day (e.g. one per group) share those chicks, deaths and feed by eggs set.
+  const peers = entries.filter((e) => e.type === "incubatorBatch" && (e.date || "") === start);
+  const peerEggs = peers.reduce((a, e) => a + (Number(e.eggs) || 0), 0) || set;
+  const share = peers.length > 1 && peerEggs ? set / peerEggs : 1;
   const hatched = entries
     .filter((e) => e.type === "born" && e.kind === "chicks" && inBatch(e))
     .reduce((a, e) => a + (Number(e.count) || 0), 0);
@@ -411,9 +415,17 @@ export function batchStats({ batch = {}, entries = [], costPerEgg = 0, incubator
   const feed = entries
     .filter((e) => e.type === "bought" && e.section === "chicks" && inBatch(e))
     .reduce((a, e) => a + (Number(e.price) || 0), 0);
-  const cost = set * costPerEgg + (Number(incubatorElectric) || 0) + feed;
-  const alive = Math.max(0, hatched - died);
-  return { set, clear, hatched, died, hatchRate: hatchRate({ set, clear, hatched }), cost: round2(cost), costPerChick: alive ? round2(cost / alive) : 0 };
+  const myHatched = Math.round(hatched * share);
+  const myDied = Math.round(died * share);
+  const myFeed = round2(feed * share);
+  const eggsCost = round2(set * costPerEgg);
+  const electric = round2(Number(incubatorElectric) || 0);
+  const cost = eggsCost + electric + myFeed;
+  const alive = Math.max(0, myHatched - myDied);
+  return {
+    set, clear, hatched: myHatched, died: myDied, hatchRate: hatchRate({ set, clear, hatched: myHatched }),
+    eggsCost, electric, feed: myFeed, cost: round2(cost), costPerChick: alive ? round2(cost / alive) : 0,
+  };
 }
 
 // PLAN §5: pigeons — costs so far this year against the December sales, and the floor price.

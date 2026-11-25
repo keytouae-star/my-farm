@@ -182,6 +182,10 @@ export async function createFirebaseBackend(config) {
   return {
     kind: "firebase",
     async session() {
+      // Nov 25: wait until Firebase has restored the saved login, or a logged-in phone
+      // is sent to the login page / "Please log in first" when the app opens.
+      if (auth.authStateReady) await auth.authStateReady();
+      else await new Promise((res) => { const off = authMod.onAuthStateChanged(auth, () => { off(); res(); }); });
       const user = auth.currentUser;
       if (!user) return null;
       return me(user, await roleOf(user));
