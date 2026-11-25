@@ -6,8 +6,8 @@ import { firebaseConfig } from "./firebase-config.js";
 export const DEMO_KEY = "myfarm-demo";
 export const EDIT_WINDOW_MS = 10 * 60 * 1000;
 
-export const WORKER_TYPES = ["eggs", "figs", "born", "moved", "died", "weighed", "bought", "openedFeed", "sold", "home", "salaryFromSales"];
-export const OWNER_TYPES = ["bill", "salaryPaid", "spentBefore", "oldSpend", "incubatorBatch", "health"];
+export const WORKER_TYPES = ["eggs", "figs", "born", "moved", "died", "weighed", "bought", "openedFeed", "sold", "home", "salaryFromSales", "candled"];
+export const OWNER_TYPES = ["bill", "salaryPaid", "spentBefore", "oldSpend", "incubatorBatch", "health", "feedCount"];
 export const MONEY_FIELDS = ["price", "amount", "cost", "value", "shopPrice", "margin", "total", "paid"];
 
 export const DEFAULT_SETTINGS = {

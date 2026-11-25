@@ -8,6 +8,7 @@ const tabbar = document.getElementById("tabbar");
 
 export const ICONS = {
   egg: '<svg viewBox="0 0 32 32" aria-hidden="true"><ellipse cx="16" cy="18" rx="9" ry="11" fill="#fdf6e6" stroke="#6b6553" stroke-width="1.6"/></svg>',
+  candle: '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 6l6 5M3 14h6M5 22l6-4" stroke="#e0a526" stroke-width="2" stroke-linecap="round"/><ellipse cx="20" cy="17" rx="8" ry="10" fill="#fff4cf" stroke="#6b6553" stroke-width="1.6"/><circle cx="20" cy="17" r="3" fill="#e9b949"/></svg>',
   fig: '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 29c-6 0-10-5-10-11 0-5 4-9 10-9s10 4 10 9c0 6-4 11-10 11z" fill="#6b3f6e"/><path d="M16 9c0-3 2-5 5-5" stroke="#4a5d23" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
   chick: '<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="18" r="9" fill="#f6d365"/><circle cx="13" cy="16" r="1.6" fill="#2a2a20"/><path d="M22 19l5 2-5 2z" fill="#a86a10"/><path d="M16 9c0-3 1-5 3-6" stroke="#a86a10" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
   move: '<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="12" cy="18" r="7" fill="#f6d365"/><path d="M20 18h8M24 14l4 4-4 4" stroke="#4a5d23" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -243,7 +244,8 @@ export const FORMS = {
     { k: "what", l: "Which animal", t: "select", opts: [["A", "Group A"], ["B", "Group B"], ["C", "Group C"], ["chicks", "Chicks"], ["pigeons", "Pigeons"], ["rabbits", "Rabbits"], ["tilapia", "Tilapia"]], req: true },
     { k: "count", l: "How many", t: "number", req: true },
   ] },
-  weighed: { title: "Weighed roosters", icon: "scale", section: "chickens", fields: [
+  weighed: { title: "Weighed birds", icon: "scale", section: "chickens", fields: [
+    { k: "kind", l: "Which birds", t: "seg", opts: [["roosters", "Young roosters"], ["hens", "Hens"]], req: true },
     { k: "w1", l: "Bird 1 (kg)", t: "number", step: "0.01" },
     { k: "w2", l: "Bird 2 (kg)", t: "number", step: "0.01" },
     { k: "w3", l: "Bird 3 (kg)", t: "number", step: "0.01" },
@@ -271,6 +273,11 @@ export const FORMS = {
   salaryFromSales: { title: "Salary from sales", icon: "coin", section: "", fields: [
     { k: "amount", l: "How much kept", t: "number", step: "0.01", req: true },
   ] },
+  // Nov 25: day 7 in the incubator — the worker shines a light through each egg.
+  candled: { title: "Candling (incubator)", icon: "candle", section: "incubators", fields: [
+    { k: "group", l: "Eggs from which group", t: "seg", opts: GROUPS, req: true },
+    { k: "clear", l: "Clear eggs (no chick inside, take them out)", t: "number", req: true },
+  ] },
 };
 
 const optLabel = (opts, v) => {
@@ -287,7 +294,9 @@ export function entryTitle(e) {
     case "born": return name + ": " + e.count + " " + optLabel(FORMS.born.fields[0].opts, e.kind).toLowerCase();
     case "moved": return name + ": " + optLabel(FORMS.moved.fields[0].opts, e.from) + " to " + optLabel(FORMS.moved.fields[1].opts, e.to) + (e.males || e.females ? ", " + (e.males || 0) + " male " + (e.females || 0) + " female" : "");
     case "died": return name + ": " + e.count + " " + optLabel(FORMS.died.fields[0].opts, e.what);
-    case "weighed": return name + ": " + [e.w1, e.w2, e.w3, e.w4].filter((x) => x).join(", ") + " kg";
+    case "weighed": return name + (e.kind === "hens" ? " (hens)" : " (young roosters)") + ": " + [e.w1, e.w2, e.w3, e.w4].filter((x) => x).join(", ") + " kg";
+    case "candled": return name + ": group " + e.group + ", " + e.clear + " clear eggs";
+    case "feedCount": return name + ": " + optLabel(FEEDS, e.feed) + ", " + e.bags + " bags in store";
     case "bought": return name + ": " + optLabel(FORMS.bought.fields[0].opts, e.what) + (e.qty ? " x" + e.qty : "") + (e.price != null ? ", " + money(e.price) : "");
     case "openedFeed": return name + ": " + optLabel(FEEDS, e.feed);
     case "sold": return name + ": " + e.count + " " + optLabel(FORMS.sold.fields[0].opts, e.what) + (e.price != null ? ", " + money(e.price) : "");
@@ -532,6 +541,28 @@ view("w/today", async () => {
   const rows = await store.listEntries({ date: today() });
   const box = el('<div class="stack"></div>');
   box.append(el(`<div class="card"><h2>My entries today</h2><p class="hint">${dayMonthYear(today())}. If it is here, it is saved.</p></div>`));
+
+  // Nov 25: still to do today — eggs per group, weigh-in day, candling day.
+  try {
+    const secs = await store.getSections();
+    const plan = secs._plan || {};
+    const t = today();
+    const todo = [];
+    const groups = Object.entries(((secs.chickens || {}).groups) || {}).filter(([, g]) => Number(g.hens) > 0).map(([k]) => k).sort();
+    for (const g of groups) if (!rows.some((e) => e.type === "eggs" && e.group === g)) todo.push(["#/w/add/eggs", "Eggs: group " + g]);
+    if (plan.roosterWeighDue && t >= plan.roosterWeighDue && !rows.some((e) => e.type === "weighed" && e.kind !== "hens")) todo.push(["#/w/add/weighed", "Weigh the 4 young roosters"]);
+    if (plan.hensWeighDue && t >= plan.hensWeighDue && !rows.some((e) => e.type === "weighed" && e.kind === "hens")) todo.push(["#/w/add/weighed", "Weigh 3 or 4 hens"]);
+    if ((plan.candle || []).some((d) => t >= d && t <= addDays(d, 2)) && !rows.some((e) => e.type === "candled")) todo.push(["#/w/add/candled", "Candling: check the eggs in the incubator"]);
+    const card = el('<div class="card stack"><h3>Still to do today</h3></div>');
+    if (!todo.length) card.append(el('<p>✓ All done for today. Thank you!</p>'));
+    for (const [href, label] of todo) {
+      const a = el(`<a class="btn block quiet" href="${href}" style="text-align:left"></a>`);
+      a.textContent = "○ " + label;
+      card.append(a);
+    }
+    box.append(card);
+  } catch (_) { /* offline before the first load: skip the list */ }
+
   if (!rows.length) {
     box.append(el('<div class="card sunk"><p>Nothing yet today.</p></div>'));
   } else {
@@ -576,7 +607,7 @@ function homePrices(settings) {
 // Every section shown in totals, plus "Farm general" for shared costs not split to an animal
 // (the labour % left over, "other" electricity). It is never saved to the sections doc.
 function sectionIds(data) {
-  return Object.keys(data.sections).filter((id) => id !== "ducks" && id !== "farm").concat("farm");
+  return Object.keys(data.sections).filter((id) => id !== "ducks" && id !== "farm" && !id.startsWith("_")).concat("farm");
 }
 function sectionName(data, id) {
   return (data.sections[id] && data.sections[id].name) || (id === "farm" ? "Farm general" : id);
@@ -654,6 +685,19 @@ view("home", async () => {
   }
   box.append(backup);
 
+  // Feed in store (after a "Counted feed bags" entry).
+  const stockRows = feedStockRows(data);
+  if (stockRows.length) {
+    const fc = el('<div class="card stack"><h3>Feed in store</h3></div>');
+    for (const r of stockRows) {
+      fc.append(el(`<div class="spread"><span>${FEED_NAME[r.feed]}: <strong>${r.bags} bag${r.bags === 1 ? "" : "s"}</strong></span><span class="hint">${r.days != null ? "about " + r.days + " days · buy by " + dayMonthYear(r.buyBy) : "days shown after 2 bags opened"}</span></div>`));
+    }
+    box.append(fc);
+  }
+
+  // The worker's phone cannot read past entries, so the owner's app leaves him the dates he needs.
+  savePlanForWorker(data);
+
   // To do: what is still missing for the numbers to be right. Each line opens the place to fix it.
   const todo = [];
   const recent = (pred) => data.entries.some((e) => pred(e) && (Date.now() - new Date((e.date || "") + "T00:00:00").getTime()) < 31 * 86400000);
@@ -663,6 +707,7 @@ view("home", async () => {
   const pg = data.sections.pigeons || {};
   if ((pg.males || pg.females || pg.young) && !pg.flying) todo.push(["#/setup", "How many flying pigeons? Needed for the December sale price"]);
   if ((data.settings.shopPrices || {}).chicken == null) todo.push(["#/settings", "Set the shop price of one chicken"]);
+  if (!data.entries.some((e) => e.type === "feedCount")) todo.push(["#/add/feedCount", "Count the full feed bags in the store (once; then the app follows them)"]);
   if ((data.settings.feedWeights || {}).layer == null) todo.push(["#/settings", "Check how many kg are in your feed bags (Settings → Feed bag weights)"]);
   if (!recent((e) => e.type === "bill" && e.kind === "electricity")) todo.push(["#/add/bill", "No electricity bill in the last month"]);
   if (!recent((e) => e.type === "bought" && e.what === "layer")) todo.push(["#/add/bought", "No layer feed bought in the last month"]);
@@ -679,8 +724,17 @@ view("home", async () => {
   const due =calc.reminders({ entries: data.entries, settings: data.settings });
   const alerts = calc.salesBelowMinimum({ entries: data.entries, stats });
   const feedAlerts = feedRates(data).filter((r) => r.ready && r.verdict && r.verdict !== "ok");
-  if (alerts.length || due.length || feedAlerts.length) {
+  const stock = feedStockRows(data);
+  const lowStock = stock.filter((r) => r.days != null && r.days <= 7);
+  const sell = calc.sellAdvice({ trend: calc.weighTrend({ entries: data.entries, kind: "roosters" }) });
+  if (alerts.length || due.length || feedAlerts.length || lowStock.length || sell.verdict === "sell") {
     const card = el('<div class="card"><div class="card-head"><h3>Alerts</h3></div><div class="stack" data-alerts></div></div>');
+    for (const r of lowStock) {
+      card.querySelector("[data-alerts]").append(el(`<p><span class="badge drop">Buy feed</span> ${FEED_NAME[r.feed]}: ${r.bags} bag${r.bags === 1 ? "" : "s"} left, about ${r.days} days. Buy by ${dayMonthYear(r.buyBy)}.</p>`));
+    }
+    if (sell.verdict === "sell") {
+      card.querySelector("[data-alerts]").append(el('<p><span class="badge drop">Sell</span> The young roosters gain under 100 g in 2 weeks. <a href="#/section/chicks">see why</a></p>'));
+    }
     for (const r of feedAlerts) {
       card.querySelector("[data-alerts]").append(el(
         `<p><span class="badge watch">Feed</span> ${FEED_NAME[r.feed]} feed: ${r.perBird} g a bird a day, usual ${r.low}–${r.high} g <a href="#/section/${r.feed === "layer" ? "chickens" : "chicks"}">see why</a></p>`
@@ -759,6 +813,81 @@ function feedCard(data, feeds) {
   return card;
 }
 
+// ---- feed in store, sell now, hens (Nov 25) ----
+
+function addDays(iso, n) { return new Date(Date.parse(iso + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10); }
+
+// One line per feed that was counted: bags left, about how long, and the day to buy by.
+// Dates the worker's "Still to do today" needs, kept in the sections doc (he may read it, not settings).
+function savePlanForWorker(data) {
+  const last = (pred) => data.entries.filter(pred).map((e) => String(e.date).slice(0, 10)).sort().pop();
+  const rw = last((e) => e.type === "weighed" && e.kind !== "hens");
+  const hw = last((e) => e.type === "weighed" && e.kind === "hens");
+  const t = today();
+  const candle = [...new Set(data.entries.filter((e) => e.type === "incubatorBatch" && addDays(e.date, 21) >= t).map((e) => addDays(e.date, 7)))].sort();
+  const plan = { roosterWeighDue: rw ? addDays(rw, 14) : "", hensWeighDue: hw ? addDays(hw, 30) : "", candle };
+  if (JSON.stringify(plan) === JSON.stringify((data.baseSections || {})._plan || null)) return;
+  store.saveSections({ _plan: plan }).catch(() => {});
+}
+
+function feedStockRows(data) {
+  const rates = Object.fromEntries(feedRates(data).map((r) => [r.feed, r]));
+  return ["layer", "grower", "starter"].map((feed) => {
+    const st = calc.feedStock({ entries: data.entries, feed });
+    if (!st.counted) return null;
+    const r = rates[feed];
+    const days = r && r.ready ? Math.floor(st.bags * r.daysPerBag) : null;
+    return { feed, bags: st.bags, days, buyBy: days != null ? addDays(today(), Math.max(0, days - 3)) : null };
+  }).filter(Boolean);
+}
+
+// Grower feed cost for one bird over 2 weeks: grams a day (measured, or 85 g) × 14 × price per kg.
+function growerCost2w(data) {
+  const r = feedRates(data).find((x) => x.feed === "grower");
+  const g = r && r.ready && r.perBird ? r.perBird : 85;
+  const buy = data.entries.filter((e) => e.type === "bought" && e.what === "grower" && Number(e.price) > 0).sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+  if (!buy) return 0;
+  const perKg = Number(buy.price) / ((Number(buy.qty) || 1) * (bagKg(data.settings, "grower") || 50));
+  return (g * 14 / 1000) * perKg;
+}
+
+function sellCard(data) {
+  const trend = calc.weighTrend({ entries: data.entries, kind: "roosters" });
+  const card = el('<div class="card stack"><h3>Sell now or keep growing?</h3></div>');
+  if (!trend.last) {
+    card.append(el('<p class="hint">Weigh 4 young roosters every 2 weeks (Add entry → Weighed birds). After 2 weigh-ins the app tells you when to sell.</p>'));
+    return card;
+  }
+  const adv = calc.sellAdvice({ trend, feedCost2w: growerCost2w(data) });
+  card.append(el(`<p>Last weigh-in ${dayMonthYear(trend.last.date)}: <strong>${trend.last.avg} kg</strong> on average (${trend.last.n} birds)</p>`));
+  if (!adv.verdict) {
+    card.append(el('<p class="hint">One more weigh-in, at least a week later, and the app can compare.</p>'));
+    return card;
+  }
+  const g = Math.round(adv.gain14 * 1000);
+  const row = el(`<div class="spread"><span>Growing ${g >= 0 ? "+" : ""}${g} g in 2 weeks</span></div>`);
+  row.append(el(`<span class="badge ${adv.verdict === "sell" ? "drop" : "keep"}">${adv.verdict === "sell" ? "Sell now" : "Keep growing"}</span>`));
+  card.append(row, el(`<p class="hint">${adv.verdict === "sell"
+    ? "They gain less than 100 g in 2 weeks: the feed now costs more than they add, and your buyer pays by eye, not by weight."
+    : "Still growing well: 2 more weeks add real size."}${adv.feedCost2w ? " 2 more weeks of grower feed cost about " + money(adv.feedCost2w) + " a bird." : ""}</p>`));
+  return card;
+}
+
+function hensCard(data) {
+  const trend = calc.weighTrend({ entries: data.entries, kind: "hens" });
+  const card = el('<div class="card stack"><h3>Hens\' weight</h3></div>');
+  if (!trend.last) {
+    card.append(el('<p class="hint">Once a month, weigh 3–4 hens (Add entry → Weighed birds → Hens). Most mixed hens are 1.6–2.0 kg.</p>'));
+    return card;
+  }
+  const adv = calc.hensAdvice(trend);
+  const change = trend.gain14 != null ? ` · ${trend.gain14 >= 0 ? "+" : ""}${Math.round(trend.gain14 * 1000)} g per 2 weeks` : "";
+  const row = el(`<div class="spread"><span>${dayMonthYear(trend.last.date)}: <strong>${trend.last.avg} kg</strong>${change}</span></div>`);
+  row.append(el(`<span class="badge ${adv.verdict === "ok" ? "keep" : "watch"}">${adv.verdict === "ok" ? "OK" : adv.verdict === "light" ? "Light" : "Losing"}</span>`));
+  card.append(row, el(`<p class="hint">${adv.verdict === "ok" ? "Good weight. Keep the same feed." : "Give about 10% more layer feed for 2 weeks, check the water, then weigh again."}</p>`));
+  return card;
+}
+
 // ---- owner screen 2: one section ----
 
 function countLines(id, sec) {
@@ -829,6 +958,8 @@ view("section", async (id) => {
 
   const feeds = { chickens: ["layer"], pigeons: ["layer"], chicks: ["starter", "grower"] }[id] || [];
   if (feeds.length) box.append(feedCard(data, feeds));
+  if (id === "chicks") box.append(sellCard(data));
+  if (id === "chickens") box.append(hensCard(data));
 
   const recent = data.entries.filter((e) => (e.section || "farm") === id).slice(0, 8);
   const list = el('<div class="card stack"><h3>Recent entries</h3></div>');
@@ -1128,6 +1259,11 @@ Object.assign(FORMS, {
     { k: "what", l: "Vaccine or medicine", t: "text", req: true },
     { k: "cost", l: "Cost", t: "number", step: "0.01" },
   ] },
+  // Nov 25: count the full bags in the store; the app then follows bags bought and opened.
+  feedCount: { title: "Counted feed bags", icon: "feed", section: "farm", fields: [
+    { k: "feed", l: "Which feed", t: "seg", opts: FEEDS, req: true },
+    { k: "bags", l: "Full bags in the store now", t: "number", step: "0.5", req: true },
+  ] },
 });
 
 // ---- first-use wizard (PLAN §9 step 4) ----
@@ -1301,7 +1437,7 @@ view("incubators", async () => {
     const st = calc.batchStats({ batch: b, entries: data.entries, costPerEgg, incubatorElectric: myElectric });
     batchCard.append(el(`<div class="stack" style="gap:2px">
       <p><strong>${b.eggs} eggs from group ${b.group}</strong> · ${b.incubator || "?"} incubator · ${dayMonthYear(b.date)}</p>
-      <p class="hint">Clear at candling: ${b.clear || 0} · hatched: ${st.hatched} · hatch rate ${st.hatchRate}%</p>
+      <p class="hint">Clear at candling: ${st.clear || 0} · hatched: ${st.hatched} · hatch rate ${st.hatchRate}%</p>
       <p class="hint">Batch cost ${money(st.cost)} = eggs ${money(st.eggsCost)} (${b.eggs} × ${money(costPerEgg)}${useShop ? ", shop price until 7 days of egg entries" : ""}) + electricity ${money(st.electric)} + chick feed ${money(st.feed)}</p>
       <p class="hint">Cost per chick: ${st.costPerChick ? money(st.costPerChick) : "no chicks yet"}</p>
     </div>`));
@@ -1455,7 +1591,7 @@ async function downloadExcel() {
     return out;
   };
   const base = Object.fromEntries(flat(data.baseSections));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flat(data.sections).filter(([k]) => !k.endsWith(".name"))
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flat(data.sections).filter(([k]) => !k.endsWith(".name") && !k.startsWith("_"))
     .map(([k, v]) => ({ Count: k, "Now (live)": v, "At last setup": base[k] ?? "" }))), "Counts");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flat(data.settings).map(([k, v]) => ({ Setting: k, Value: Array.isArray(v) ? JSON.stringify(v) : v }))), "Settings");
   XLSX.writeFile(wb, "my-farm-" + today() + ".xlsx");

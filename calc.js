@@ -53,6 +53,49 @@ export function feedRate({ entries = [], feed, bagKg = 0, heads = 0 }) {
   return { ready: true, opens: opens.length, daysPerBag: round1(daysPerBag), kgPerDay: round2(kgPerDay), perBird, heads, low: lo, high: hi, verdict };
 }
 
+// Nov 25: weigh-ins. "weighed" entries hold up to 4 birds (w1..w4, kg); kind "hens" or roosters (default).
+export function weighTrend({ entries = [], kind = "roosters" }) {
+  const rows = entries
+    .filter((e) => e.type === "weighed" && (e.kind === "hens" ? "hens" : "roosters") === kind)
+    .map((e) => {
+      const ws = [e.w1, e.w2, e.w3, e.w4].map(Number).filter((x) => x > 0);
+      return { date: String(e.date).slice(0, 10), avg: ws.length ? ws.reduce((a, b) => a + b, 0) / ws.length : 0, n: ws.length };
+    })
+    .filter((r) => r.n)
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+  const last = rows[rows.length - 1] || null;
+  // Compare with the latest weigh-in at least 7 days earlier, scaled to 14 days.
+  const prev = last ? [...rows].reverse().find((r) => (Date.parse(last.date) - Date.parse(r.date)) / 86400000 >= 7) || null : null;
+  const days = prev ? (Date.parse(last.date) - Date.parse(prev.date)) / 86400000 : 0;
+  const gain14 = prev ? round2(((last.avg - prev.avg) / days) * 14) : null;
+  return { rows, last: last && { ...last, avg: round2(last.avg) }, prev: prev && { ...prev, avg: round2(prev.avg) }, gain14 };
+}
+
+// Growing males: sell when they gain under ~100 g in 2 weeks (feed then costs more than they add).
+export function sellAdvice({ trend, feedCost2w = 0 }) {
+  if (!trend || trend.gain14 == null) return { verdict: null };
+  const verdict = trend.gain14 < 0.1 ? "sell" : "keep";
+  return { verdict, gain14: trend.gain14, feedCost2w: round2(feedCost2w) };
+}
+
+// Layer hens: most mixed hens are about 1.6–2.0 kg. Light or losing weight = give a little more.
+export function hensAdvice(trend) {
+  if (!trend || !trend.last) return { verdict: null };
+  if (trend.last.avg < 1.4) return { verdict: "light" };
+  if (trend.gain14 != null && trend.gain14 <= -0.1) return { verdict: "losing" };
+  return { verdict: "ok" };
+}
+
+// Feed in store: the last count ("feedCount": bags) plus bags bought after it, minus bags opened after it.
+export function feedStock({ entries = [], feed }) {
+  const after = (e, c) => e.date > c.date || (e.date === c.date && String(e.at || "") > String(c.at || ""));
+  const count = entries.filter((e) => e.type === "feedCount" && e.feed === feed).sort((a, b) => (a.date + (a.at || "") < b.date + (b.at || "") ? -1 : 1)).pop();
+  if (!count) return { counted: false };
+  const bought = entries.filter((e) => e.type === "bought" && e.what === feed && after(e, count)).reduce((a, e) => a + (Number(e.qty) || 1), 0);
+  const opened = entries.filter((e) => e.type === "openedFeed" && e.feed === feed && after(e, count)).length;
+  return { counted: true, countDate: count.date, bags: Math.max(0, round1((Number(count.bags) || 0) + bought - opened)) };
+}
+
 // PLAN §4: RO water. Fig trees get the owner's %; the rest is split between all animals by head count.
 export function splitRO({ amount, figShare, heads = {} }) {
   const figs = round2((amount * (figShare || 0)) / 100);
@@ -450,7 +493,10 @@ export function eggLog({ entries = [], counts = {} }) {
 // so a second batch never takes the first batch's chicks, deaths or feed.
 export function batchStats({ batch = {}, entries = [], costPerEgg = 0, incubatorElectric = 0 }) {
   const set = Number(batch.eggs) || 0;
-  const clear = Number(batch.clear) || 0;
+  // Clear eggs: typed on the batch by the owner, or a worker "candled" entry for this group (Nov 25).
+  const candled = entries.filter((e) => e.type === "candled" && e.group === batch.group && String(e.date) >= String(batch.date || "")
+    && (Date.parse(e.date) - Date.parse(batch.date)) / 86400000 <= 14);
+  const clear = Number(batch.clear) || candled.reduce((a, e) => a + (Number(e.clear) || 0), 0);
   const start = batch.date || "";
   const next = entries
     .filter((e) => e.type === "incubatorBatch" && e !== batch && (e.date || "") > start)
@@ -551,10 +597,15 @@ export function reminders({ entries = [], settings = {}, now = new Date() }) {
     push("chicks", left, "Move the chicks to the grower stage" + (left < 0 ? " (late)" : ""), "Hatched " + fmtDate(born));
   }
 
-  const weighed = entries.filter((e) => e.type === "weighed").map((e) => e.date).sort().pop();
+  const weighed = entries.filter((e) => e.type === "weighed" && e.kind !== "hens").map((e) => e.date).sort().pop();
   if (weighed) {
     const left = daysTo(new Date(parse(weighed).getTime() + 14 * dayMs));
-    push("weigh", left, "Weigh-in day" + (left < 0 ? " (late)" : ""), "Last weigh-in " + fmtDate(weighed));
+    push("weigh", left, "Weigh-in day: roosters" + (left < 0 ? " (late)" : ""), "Last weigh-in " + fmtDate(weighed));
+  }
+  const hensW = entries.filter((e) => e.type === "weighed" && e.kind === "hens").map((e) => e.date).sort().pop();
+  if (hensW) {
+    const left = daysTo(new Date(parse(hensW).getTime() + 30 * dayMs));
+    push("weighHens", left, "Weigh-in day: hens" + (left < 0 ? " (late)" : ""), "Last hens weigh-in " + fmtDate(hensW));
   }
 
   for (const feed of ["layer", "grower", "starter"]) {
@@ -565,7 +616,7 @@ export function reminders({ entries = [], settings = {}, now = new Date() }) {
     const avg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
     if (!avg) continue;
     const left = daysTo(new Date(parse(opens[opens.length - 1]).getTime() + avg * dayMs));
-    if (left <= 3) push("feed", left, "About " + Math.max(0, left) + " days of " + feed + " feed left", "A bag lasts about " + Math.round(avg) + " days");
+    if (left <= 3) push("feed", left, "The open " + feed + " bag runs out in about " + Math.max(0, left) + " days", "A bag lasts about " + Math.round(avg) + " days");
   }
 
   if (settings.roFilterDate) {
