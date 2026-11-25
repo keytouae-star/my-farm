@@ -82,17 +82,24 @@ function currentRoute() {
   return { name, args: rest };
 }
 
+// Two renders can overlap (e.g. login sets the hash AND calls render). Only the newest one
+// may draw, otherwise the screen shows twice.
+let renderSeq = 0;
 export async function render() {
+  const seq = ++renderSeq;
   const { name, args } = currentRoute();
   const fn = views[name] || views.home;
   app.innerHTML = "";
+  let node;
   try {
-    const node = await fn(...args);
-    if (node) app.append(node);
+    node = await fn(...args);
   } catch (err) {
-    app.append(el('<div class="card"><h2>Something went wrong</h2><p class="hint" id="errMsg"></p></div>'));
-    app.querySelector("#errMsg").textContent = err.message;
+    node = el('<div class="card"><h2>Something went wrong</h2><p class="hint" id="errMsg"></p></div>');
+    node.querySelector("#errMsg").textContent = err.message;
   }
+  if (seq !== renderSeq) return;
+  app.innerHTML = "";
+  if (node) app.append(node);
   markTabs(name);
   window.scrollTo(0, 0);
 }
@@ -711,7 +718,7 @@ view("section", async (id) => {
     const card = el('<div class="card stack"><h3>Pigeons this year</h3></div>');
     card.append(el(`<p class="hint">Costs so far: ${money(ps.costs)}</p>`));
     card.append(el(`<p class="hint">Sales this year: ${money(ps.sales)}</p>`));
-    card.append(el(`<p class="hint">Floor price per flying pigeon: ${ps.floorPrice ? money(ps.floorPrice) : "add the flying count in Settings"}</p>`));
+    card.append(el(`<p class="hint">Floor price per flying pigeon: ${ps.floorPrice ? money(ps.floorPrice) : "add the flying count in Settings → Correct the animal counts"}</p>`));
     box.append(card);
   }
   return box;
