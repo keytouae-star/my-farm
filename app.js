@@ -253,7 +253,7 @@ export const FORMS = {
     { k: "buyer", l: "Buyer", t: "text" },
   ] },
   home: { title: "Taken for the house", icon: "house", section: "", fields: [
-    { k: "what", l: "What", t: "select", req: true, opts: [["eggs", "Eggs"], ["figs", "Figs (kg)"], ["bird", "A bird"], ["fish", "A fish"], ["rabbit", "A rabbit"]] },
+    { k: "what", l: "What", t: "select", req: true, opts: [["eggs", "Eggs"], ["figs", "Figs (kg)"], ["bird", "A chicken"], ["pigeon", "A pigeon"], ["fish", "Fish (kg)"], ["rabbit", "A rabbit"]] },
     { k: "count", l: "How many", t: "number", req: true },
   ] },
   salaryFromSales: { title: "Salary from sales", icon: "coin", section: "", fields: [
@@ -299,7 +299,7 @@ const SECTION_FOR = {
   bought: (v) => (v === "starter" || v === "grower" ? "chicks" : v === "layer" ? "chickens" : v === "fertilizer" || v === "spray" ? "figs" : v === "roFilters" || v === "roChemicals" ? "figs" : "farm"),
   sold: (v) => ({ rooster: "chicks", eggs: "chickens", pigeon: "pigeons", rabbit: "rabbits", tilapia: "tilapia", figs: "figs" }[v] || "farm"),
   died: (v) => ({ A: "chickens", B: "chickens", C: "chickens", chicks: "chicks", pigeons: "pigeons", rabbits: "rabbits", tilapia: "tilapia" }[v] || "farm"),
-  home: (v) => ({ eggs: "chickens", figs: "figs", bird: "chickens", fish: "tilapia", rabbit: "rabbits" }[v] || "farm"),
+  home: (v) => ({ eggs: "chickens", figs: "figs", bird: "chickens", pigeon: "pigeons", fish: "tilapia", rabbit: "rabbits" }[v] || "farm"),
   health: (v) => ({ A: "chickens", B: "chickens", C: "chickens", chicks: "chicks", pigeons: "pigeons", rabbits: "rabbits" }[v] || "farm"),
 };
 
@@ -494,7 +494,8 @@ view("w/today", async () => {
 
 // ---- owner: shared data helpers ----
 
-const HOME_PRICE_KEY = { eggs: "egg", figs: "figKg", bird: "roosterKg", fish: "tilapiaKg", rabbit: "rabbit" };
+// "bird" is a whole chicken (priced per bird); fish and figs are entered in kg.
+const HOME_PRICE_KEY = { eggs: "egg", figs: "figKg", bird: "chicken", pigeon: "pigeon", fish: "tilapiaKg", rabbit: "rabbit" };
 
 async function loadAll() {
   const [settings, sections, entries] = await Promise.all([store.getSettings(), store.getSections(), store.listEntries()]);
@@ -504,7 +505,9 @@ async function loadAll() {
 function homePrices(settings) {
   const sp = settings.shopPrices || {};
   const out = {};
-  for (const [k, key] of Object.entries(HOME_PRICE_KEY)) out[k] = sp[key] || 0;
+  // A price the owner never saved (e.g. "One chicken", added Nov 25) falls back to the default.
+  const def = store.DEFAULT_SETTINGS.shopPrices || {};
+  for (const [k, key] of Object.entries(HOME_PRICE_KEY)) out[k] = Number(sp[key] ?? def[key]) || 0;
   return out;
 }
 
@@ -705,7 +708,7 @@ view("section", async (id) => {
     const ps = calc.pigeonStats({ entries: allocated, counts: sec });
     const card = el('<div class="card stack"><h3>Pigeons this year</h3></div>');
     card.append(el(`<p class="hint">Costs so far: ${money(ps.costs)}</p>`));
-    card.append(el(`<p class="hint">December sales: ${money(ps.sales)}</p>`));
+    card.append(el(`<p class="hint">Sales this year: ${money(ps.sales)}</p>`));
     card.append(el(`<p class="hint">Floor price per flying pigeon: ${ps.floorPrice ? money(ps.floorPrice) : "add the flying count in Settings"}</p>`));
     box.append(card);
   }
@@ -844,7 +847,7 @@ view("settings", async () => {
     ], "Labour"],
     ["Margins %", [["margins.figs", "Figs"], ["margins.liveAnimals", "Live animals"]]],
     ["Local prices (AED)", [["localPrices.rooster.low", "Rooster low"], ["localPrices.rooster.high", "Rooster high"], ["localPrices.pigeon.low", "Pigeon low"], ["localPrices.pigeon.high", "Pigeon high"]]],
-    ["Shop prices for home use", [["shopPrices.egg", "One egg"], ["shopPrices.figKg", "Fig per kg"], ["shopPrices.roosterKg", "Rooster per kg"], ["shopPrices.pigeon", "One pigeon"], ["shopPrices.rabbit", "One rabbit"], ["shopPrices.tilapiaKg", "Tilapia per kg"]]],
+    ["Shop prices for home use", [["shopPrices.egg", "One egg"], ["shopPrices.figKg", "Fig per kg"], ["shopPrices.chicken", "One chicken"], ["shopPrices.pigeon", "One pigeon"], ["shopPrices.rabbit", "One rabbit"], ["shopPrices.tilapiaKg", "Tilapia per kg"]]],
     ["Feed bag weights (kg)", [["feedWeights.starter", "Starter"], ["feedWeights.grower", "Grower"], ["feedWeights.layer", "Layer"]]],
     ["Money and ages", [["salary", "Salary per month"], ["stageAges.starterWeeks", "Starter stage (weeks)"], ["stageAges.growerWeeks", "Grower stage (weeks)"]]],
   ];

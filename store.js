@@ -18,7 +18,7 @@ export const DEFAULT_SETTINGS = {
   },
   margins: { figs: 25, liveAnimals: 35 },
   localPrices: { rooster: { low: 25, high: 30 }, pigeon: { low: 0, high: 0 } },
-  shopPrices: { egg: 0.7, figKg: 12, roosterKg: 18, pigeon: 15, rabbit: 40, tilapiaKg: 20 },
+  shopPrices: { egg: 0.7, figKg: 12, roosterKg: 18, chicken: 30, pigeon: 15, rabbit: 40, tilapiaKg: 20 },
   feedWeights: { starter: 25, grower: 25, layer: 25 },
   salary: 1200,
   stageAges: { starterWeeks: 4, growerWeeks: 10 },
