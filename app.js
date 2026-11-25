@@ -256,7 +256,7 @@ export const FORMS = {
     { k: "what", l: "What did you sell", t: "select", req: true, opts: [["rooster", "Rooster"], ["pigeon", "Pigeon"], ["rabbit", "Rabbit"], ["tilapia", "Tilapia"], ["eggs", "Eggs"], ["figs", "Figs"]] },
     { k: "count", l: "How many", t: "number", req: true },
     { k: "weightKg", l: "Weight (kg)", t: "number", step: "0.01" },
-    { k: "price", l: "Price received", t: "number", step: "0.01", req: true },
+    { k: "price", l: "Price received (total for all)", t: "number", step: "0.01", req: true },
     { k: "buyer", l: "Buyer", t: "text" },
   ] },
   home: { title: "Taken for the house", icon: "house", section: "", fields: [
@@ -330,7 +330,33 @@ async function addScreen(type) {
   return box;
 }
 
+// Nov 25: catch the common slips before they spoil the numbers. Simple English for the worker.
+let warnedSig = null;
+async function entryWarning(e) {
+  const t = today();
+  if (e.date > t) return "The date is in the future. Is it right?";
+  if ((Date.parse(t) - Date.parse(e.date)) / 86400000 > 7) return "The date is more than a week ago. Is it right?";
+  const n = Number(e.count) || 0;
+  if (e.type === "eggs") {
+    let hens = 0;
+    try { const s = await store.getSections(); hens = Number((((s.chickens || {}).groups || {})[e.group] || {}).hens) || 0; } catch (_) { /* offline: skip */ }
+    if (hens && e.eggs > hens) return `Group ${e.group} has ${hens} hen${hens === 1 ? "" : "s"}. ${e.eggs} eggs in one day is too many. Enter only today's eggs.`;
+  }
+  if (e.type === "incubatorBatch" && Number(e.eggs) > Number(e.incubator)) return `The ${e.incubator} incubator holds ${e.incubator} eggs, not ${e.eggs}.`;
+  if (e.type === "sold" && n) {
+    const each = (Number(e.price) || 0) / n;
+    const max = { rooster: 150, pigeon: 150, rabbit: 300, eggs: 5, figs: 100, tilapia: 100 }[e.what] || 500;
+    if (each > max) return `That is ${money(each)} for each one. Price is the TOTAL for all ${n}. Is it right?`;
+    if (each > 0 && each < 1 && e.what !== "eggs") return `That is ${money(each)} for each one. Is it right?`;
+  }
+  if (e.type === "bought" && Number(e.price) > 2000) return `${money(e.price)} is a lot. Is it right?`;
+  if (e.type === "bill" && Number(e.amount) > 5000) return `${money(e.amount)} is a lot for one bill. Is it right?`;
+  if (e.type === "died" && n > 20) return `${n} died? Is it right?`;
+  return "";
+}
+
 function formScreen(type) {
+  warnedSig = null;
   const f = FORMS[type];
   if (!f) return el('<div class="card"><p>Unknown entry type.</p></div>');
   const src = editing && editing.type === type ? editing : null;
@@ -420,6 +446,16 @@ function formScreen(type) {
     const entry = { type, ...data, date: dateInp.value, note: noteInp.value.trim() };
     const key = f.fields[0] && SECTION_FOR[type] ? f.fields[0].k : null;
     entry.section = type === "spentBefore" ? data.section : f.section || (key ? SECTION_FOR[type](data[key]) : "farm");
+    // Likely typo? Say so once; a second tap on "Save anyway" saves it as it is.
+    const warn = await entryWarning(entry);
+    const sig = JSON.stringify(entry);
+    if (warn && warnedSig !== sig) {
+      warnedSig = sig;
+      msg.textContent = "⚠ " + warn;
+      save.textContent = "Save anyway";
+      return;
+    }
+    warnedSig = null;
     try {
       save.disabled = true;
       if (src) await store.updateEntry(src.id, entry);
@@ -585,7 +621,44 @@ view("home", async () => {
   }
   box.append(goal);
 
-  const due = calc.reminders({ entries: data.entries, settings: data.settings });
+  // Backup card: always shows when the last Excel copy was made; red after 7 days or never.
+  const days = daysSinceBackup(data.settings);
+  const late = days === null || days >= 7;
+  const backup = el(`<div class="card ${late ? "" : "sunk"}"><div class="spread"><span>${late ? '<span class="badge drop">Backup</span> ' : ""}<span data-b></span></span></div></div>`);
+  backup.querySelector("[data-b]").textContent = days === null ? "No Excel backup saved yet" : "Last Excel backup: " + (days === 0 ? "today" : days === 1 ? "yesterday" : days + " days ago");
+  if (late) {
+    const btn = el('<button class="btn primary block" type="button">Save a backup now</button>');
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try { await downloadExcel(); toast("Backup saved. Put the file in Google Drive."); render(); }
+      catch (e) { toast(e.message); btn.disabled = false; }
+    });
+    backup.append(el('<p class="hint">Once a week: save it, then put the file in Google Drive.</p>'), btn);
+  }
+  box.append(backup);
+
+  // To do: what is still missing for the numbers to be right. Each line opens the place to fix it.
+  const todo = [];
+  const recent = (pred) => data.entries.some((e) => pred(e) && (Date.now() - new Date((e.date || "") + "T00:00:00").getTime()) < 31 * 86400000);
+  const SPENT = [["chickens", "Chickens"], ["incubators", "Incubators"], ["pigeons", "Pigeons"], ["rabbits", "Rabbits"], ["tilapia", "Fish pond"], ["figs", "Figs"]];
+  const noSpent = SPENT.filter(([id]) => !data.entries.some((e) => e.type === "spentBefore" && e.section === id)).map(([, l]) => l);
+  if (noSpent.length) todo.push(["#/setup", "Start-up costs not entered: " + noSpent.join(", ") + " (type 0 if nothing)"]);
+  const pg = data.sections.pigeons || {};
+  if ((pg.males || pg.females || pg.young) && !pg.flying) todo.push(["#/setup", "How many flying pigeons? Needed for the December sale price"]);
+  if ((data.settings.shopPrices || {}).chicken == null) todo.push(["#/settings", "Set the shop price of one chicken"]);
+  if (!recent((e) => e.type === "bill" && e.kind === "electricity")) todo.push(["#/add/bill", "No electricity bill in the last month"]);
+  if (!recent((e) => e.type === "bought" && e.what === "layer")) todo.push(["#/add/bought", "No layer feed bought in the last month"]);
+  if (todo.length) {
+    const card = el('<div class="card stack"><h3>To do</h3><p class="hint">Until these are done, the costs look lower than they are.</p></div>');
+    for (const [href, label] of todo) {
+      const a = el(`<a class="btn block quiet" href="${href}" style="text-align:left"></a>`);
+      a.textContent = "○ " + label;
+      card.append(a);
+    }
+    box.append(card);
+  }
+
+  const due =calc.reminders({ entries: data.entries, settings: data.settings });
   const alerts = calc.salesBelowMinimum({ entries: data.entries, stats });
   if (alerts.length || due.length) {
     const card = el('<div class="card"><div class="card-head"><h3>Alerts</h3></div><div class="stack" data-alerts></div></div>');
@@ -616,7 +689,7 @@ view("home", async () => {
     card.querySelector("[data-cash]").textContent = money(m ? m.cash : 0);
     card.querySelector("[data-sub]").textContent = s.entries
       ? "Home value this month " + money(m ? m.home : 0) + " · based on " + s.weeks + " weeks of entries"
-      : "No entries yet";
+      : s.costs ? "Only its share of salary and bills so far" : "No entries yet";
     box.append(card);
   }
 
@@ -1055,14 +1128,16 @@ view("setup", async () => {
   // Running the setup again must never add the start-up money twice: a section that already
   // has its "spent before" entry shows it instead of a box (change it in Entries if it is wrong).
   const spent = {};
+  const spentIns = {};
   for (const [id, label] of [["chickens", "Chickens"], ["incubators", "Incubators"], ["pigeons", "Pigeons"], ["rabbits", "Rabbits"], ["tilapia", "Fish pond"], ["figs", "Figs"]]) {
     const done = data.entries.filter((e) => e.type === "spentBefore" && e.section === id);
     if (done.length) {
       form.append(el(`<p class="hint">${label}: already entered, ${money(done.reduce((a, e) => a + (Number(e.amount) || 0), 0))}</p>`));
       continue;
     }
-    spent[id] = 0;
-    addNum(spent, id, "Spent on " + label, "0.01");
+    // Empty box = not answered yet (stays on the To do list); a typed 0 = "nothing spent", saved.
+    spent[id] = "";
+    spentIns[id] = addNum(spent, id, "Spent on " + label + " (0 if nothing)", "0.01");
   }
   form.append(el("<h3>Old farm spending (not counted)</h3>"));
   form.append(el('<p class="hint">Greenhouses, generator, RO machine, pumps. Written down for your records only: never counted in profit, payback or your goal.</p>'));
@@ -1082,7 +1157,7 @@ view("setup", async () => {
       await store.saveSections(sec);
       await store.saveSettings(set);
       for (const [id, amount] of Object.entries(spent)) {
-        if (amount > 0) await store.addEntry({ type: "spentBefore", section: id, amount, date: "2026-11-21", note: "Spent before 22 Nov" });
+        if (spentIns[id] && spentIns[id].value.trim() !== "") await store.addEntry({ type: "spentBefore", section: id, amount, date: "2026-11-21", note: "Spent before 22 Nov" });
       }
       if (old.oldTotal > 0) await store.addEntry({ type: "oldSpend", section: "old", what: "Old farm equipment", amount: old.oldTotal, date: "2026-11-21", note: "Not counted" });
       toast("Farm set up");
@@ -1272,7 +1347,30 @@ async function downloadExcel() {
     }
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(monthly), "Monthly");
+  // Nov 25: a complete copy, so the farm could be rebuilt from this one file.
+  // "All data": every field of every entry. "Counts": live and setup counts. "Settings": every setting.
+  const keys = [...new Set(data.entries.flatMap((e) => Object.keys(e)))].sort();
+  const all = data.entries.map((e) => Object.fromEntries(keys.map((k) => [k, e[k] == null ? "" : typeof e[k] === "object" ? JSON.stringify(e[k]) : e[k]])));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(all.length ? all : [{ note: "no entries" }]), "All data");
+  const flat = (obj, pre = "", out = []) => {
+    for (const [k, v] of Object.entries(obj || {})) {
+      if (v && typeof v === "object" && !Array.isArray(v)) flat(v, pre + k + ".", out);
+      else out.push([pre + k, v]);
+    }
+    return out;
+  };
+  const base = Object.fromEntries(flat(data.baseSections));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flat(data.sections).filter(([k]) => !k.endsWith(".name"))
+    .map(([k, v]) => ({ Count: k, "Now (live)": v, "At last setup": base[k] ?? "" }))), "Counts");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flat(data.settings).map(([k, v]) => ({ Setting: k, Value: Array.isArray(v) ? JSON.stringify(v) : v }))), "Settings");
   XLSX.writeFile(wb, "my-farm-" + today() + ".xlsx");
+  await store.saveSettings({ lastBackupAt: Date.now() });
+}
+
+// How many whole days since the last Excel backup (null = never).
+function daysSinceBackup(settings) {
+  const t = Number(settings.lastBackupAt) || 0;
+  return t ? Math.floor((Date.now() - t) / 86400000) : null;
 }
 
 boot();
