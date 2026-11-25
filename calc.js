@@ -335,17 +335,24 @@ export function eggLog({ entries = [], counts = {} }) {
 }
 
 // PLAN §5: one incubator batch — hatch rate and cost per chick.
+// Each batch owns the chick entries from its own date up to (not including) the next batch's date,
+// so a second batch never takes the first batch's chicks, deaths or feed.
 export function batchStats({ batch = {}, entries = [], costPerEgg = 0, incubatorElectric = 0 }) {
   const set = Number(batch.eggs) || 0;
   const clear = Number(batch.clear) || 0;
+  const start = batch.date || "";
+  const next = entries
+    .filter((e) => e.type === "incubatorBatch" && e !== batch && (e.date || "") > start)
+    .map((e) => e.date).sort()[0];
+  const inBatch = (e) => (e.date || "") >= start && (!next || (e.date || "") < next);
   const hatched = entries
-    .filter((e) => e.type === "born" && e.kind === "chicks" && (!batch.date || e.date >= batch.date))
+    .filter((e) => e.type === "born" && e.kind === "chicks" && inBatch(e))
     .reduce((a, e) => a + (Number(e.count) || 0), 0);
   const died = entries
-    .filter((e) => e.type === "died" && e.section === "chicks")
+    .filter((e) => e.type === "died" && e.section === "chicks" && inBatch(e))
     .reduce((a, e) => a + (Number(e.count) || 0), 0);
   const feed = entries
-    .filter((e) => e.type === "bought" && e.section === "chicks")
+    .filter((e) => e.type === "bought" && e.section === "chicks" && inBatch(e))
     .reduce((a, e) => a + (Number(e.price) || 0), 0);
   const cost = set * costPerEgg + (Number(incubatorElectric) || 0) + feed;
   const alive = Math.max(0, hatched - died);
@@ -353,9 +360,10 @@ export function batchStats({ batch = {}, entries = [], costPerEgg = 0, incubator
 }
 
 // PLAN §5: pigeons — costs so far this year against the December sales, and the floor price.
+// Give it the allocated entries (allocateShared) so the shared feed, salary and water count too.
 export function pigeonStats({ entries = [], counts = {}, year = new Date().getFullYear() }) {
   const rows = entries.filter((e) => e.section === "pigeons" && (e.date || "").startsWith(String(year)));
-  const costs = rows.filter((e) => ["bought", "bill", "health"].includes(e.type)).reduce((a, e) => a + (Number(e.price ?? e.amount ?? e.cost) || 0), 0);
+  const costs = rows.filter((e) => ["bought", "bill", "health", "share"].includes(e.type)).reduce((a, e) => a + (Number(e.price ?? e.amount ?? e.cost) || 0), 0);
   const sales = rows.filter((e) => e.type === "sold").reduce((a, e) => a + (Number(e.price) || 0), 0);
   const flying = Number(counts.flying) || 0;
   return { costs: round2(costs), sales: round2(sales), flying, floorPrice: flying ? round2(costs / flying) : 0 };
@@ -439,7 +447,7 @@ export function reminders({ entries = [], settings = {}, now = new Date() }) {
   return out.sort((a, b) => a.days - b.days);
 }
 
-export function monthlyBySection(entries) {
+export function monthlyBySection(entries, shopPrices = {}) {
   const out = {};
   for (const e of entries) {
     const month = (e.date || "").slice(0, 7);
@@ -450,13 +458,14 @@ export function monthlyBySection(entries) {
     if (e.type === "sold") cell.sales += Number(e.price) || 0;
     if (e.type === "bought" || e.type === "bill" || e.type === "health") cell.costs += Number(e.price ?? e.amount ?? e.cost) || 0;
     if (e.type === "share") cell.costs += Number(e.amount) || 0;
-    if (e.type === "home") cell.home += 1;
+    if (e.type === "home") cell.home += (Number(e.count) || 0) * (shopPrices[e.what] ?? 0);
   }
   for (const month of Object.keys(out)) {
     for (const section of Object.keys(out[month])) {
       const c = out[month][section];
       c.sales = round2(c.sales);
       c.costs = round2(c.costs);
+      c.home = round2(c.home);
       c.cash = round2(c.sales - c.costs);
     }
   }

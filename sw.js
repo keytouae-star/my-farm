@@ -1,6 +1,6 @@
 /* My Farm service worker: the app opens offline.
    App files are network-first (so updates arrive when online) with the cached copy as fallback. */
-const CACHE = "myfarm-v1";
+const CACHE = "myfarm-v2";
 const APP = ["./", "index.html", "styles.css", "app.js", "store.js", "calc.js", "firebase-config.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {

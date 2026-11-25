@@ -702,7 +702,7 @@ view("section", async (id) => {
     box.append(card);
   }
   if (id === "pigeons") {
-    const ps = calc.pigeonStats({ entries: data.entries, counts: sec });
+    const ps = calc.pigeonStats({ entries: allocated, counts: sec });
     const card = el('<div class="card stack"><h3>Pigeons this year</h3></div>');
     card.append(el(`<p class="hint">Costs so far: ${money(ps.costs)}</p>`));
     card.append(el(`<p class="hint">December sales: ${money(ps.sales)}</p>`));
@@ -1236,10 +1236,10 @@ async function downloadExcel() {
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Entries");
   const monthly = [];
-  const byMonth = calc.monthlyBySection(calc.allocateShared({ entries: data.entries, settings: data.settings, counts: data.sections, now: new Date() }));
+  const byMonth = calc.monthlyBySection(allocatedEntries(data), homePrices(data.settings));
   for (const [month, sections] of Object.entries(byMonth)) {
     for (const [section, cell] of Object.entries(sections)) {
-      monthly.push({ Month: month, Section: section, Sales: cell.sales, Costs: cell.costs, Cash: cell.cash });
+      monthly.push({ Month: month, Section: section, Sales: cell.sales, Costs: cell.costs, Cash: cell.cash, "Home value": cell.home });
     }
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(monthly), "Monthly");
