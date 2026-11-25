@@ -663,6 +663,7 @@ view("home", async () => {
   const pg = data.sections.pigeons || {};
   if ((pg.males || pg.females || pg.young) && !pg.flying) todo.push(["#/setup", "How many flying pigeons? Needed for the December sale price"]);
   if ((data.settings.shopPrices || {}).chicken == null) todo.push(["#/settings", "Set the shop price of one chicken"]);
+  if ((data.settings.feedWeights || {}).layer == null) todo.push(["#/settings", "Check how many kg are in your feed bags (Settings → Feed bag weights)"]);
   if (!recent((e) => e.type === "bill" && e.kind === "electricity")) todo.push(["#/add/bill", "No electricity bill in the last month"]);
   if (!recent((e) => e.type === "bought" && e.what === "layer")) todo.push(["#/add/bought", "No layer feed bought in the last month"]);
   if (todo.length) {
@@ -677,8 +678,14 @@ view("home", async () => {
 
   const due =calc.reminders({ entries: data.entries, settings: data.settings });
   const alerts = calc.salesBelowMinimum({ entries: data.entries, stats });
-  if (alerts.length || due.length) {
+  const feedAlerts = feedRates(data).filter((r) => r.ready && r.verdict && r.verdict !== "ok");
+  if (alerts.length || due.length || feedAlerts.length) {
     const card = el('<div class="card"><div class="card-head"><h3>Alerts</h3></div><div class="stack" data-alerts></div></div>');
+    for (const r of feedAlerts) {
+      card.querySelector("[data-alerts]").append(el(
+        `<p><span class="badge watch">Feed</span> ${FEED_NAME[r.feed]} feed: ${r.perBird} g a bird a day, usual ${r.low}–${r.high} g <a href="#/section/${r.feed === "layer" ? "chickens" : "chicks"}">see why</a></p>`
+      ));
+    }
     for (const r of due.slice(0, 6)) {
       card.querySelector("[data-alerts]").append(el(
         `<p><span class="badge ${r.due ? "drop" : "watch"}">${r.due ? "Due" : "Soon"}</span> ${r.title} <span class="hint">${r.detail}</span></p>`
@@ -718,6 +725,39 @@ view("home", async () => {
   return box;
 });
 
+
+// ---- feed per bird (Nov 25) ----
+
+const FEED_NAME = { starter: "Starter", grower: "Grower", layer: "Layer" };
+function bagKg(settings, feed) {
+  const v = ((settings.feedWeights || {})[feed]) ?? (store.DEFAULT_SETTINGS.feedWeights || {})[feed];
+  return Number(v) || 0;
+}
+function feedRates(data) {
+  return ["layer", "grower", "starter"].map((feed) => ({ feed, ...calc.feedRate({ entries: data.entries, feed, bagKg: bagKg(data.settings, feed), heads: calc.feedHeads(feed, data.sections) }) }));
+}
+const FEED_ADVICE = {
+  ok: "Good: inside the usual range.",
+  low: "Less than usual. If the birds lose weight or lay fewer eggs, give about 10% more. Also check the bag weight in Settings.",
+  high: "More than usual. First look for spilled feed, rats or wild birds; if there are none, give about 10% less.",
+};
+function feedCard(data, feeds) {
+  const card = el('<div class="card stack"><h3>Feed per bird</h3></div>');
+  const rows = feedRates(data).filter((x) => feeds.includes(x.feed) && (x.heads || x.feed === "layer"));
+  if (!rows.length) return document.createDocumentFragment();
+  for (const r of rows) {
+    const name = FEED_NAME[r.feed] + " feed";
+    if (!r.ready) {
+      card.append(el(`<p class="hint">${name}: tap "Opened a feed bag" each time a new bag is opened. After 2 bags the app shows how much each bird eats.</p>`));
+      continue;
+    }
+    const row = el(`<div class="spread"><span>${name}: <strong>${r.perBird} g</strong> a bird a day</span></div>`);
+    if (r.verdict) row.append(el(`<span class="badge ${r.verdict === "ok" ? "keep" : "watch"}">${r.verdict === "ok" ? "OK" : r.verdict === "low" ? "Low" : "High"}</span>`));
+    card.append(row, el(`<p class="hint">A ${bagKg(data.settings, r.feed)} kg bag lasts ${r.daysPerBag} days for about ${Math.round(r.heads)} ${r.feed === "layer" ? "chicken-sized birds (3 pigeons eat like 1 chicken)" : "birds"}. Usual: ${r.low}–${r.high} g. ${r.verdict ? FEED_ADVICE[r.verdict] : ""}</p>`));
+  }
+  card.append(el('<p class="hint">Change feed by about 10% at a time, then wait 2 weeks: weigh a few birds and watch the eggs.</p>'));
+  return card;
+}
 
 // ---- owner screen 2: one section ----
 
@@ -786,6 +826,9 @@ view("section", async (id) => {
     for (const c of counts) card.append(el(`<p class="hint">${c}</p>`));
     box.append(card);
   }
+
+  const feeds = { chickens: ["layer"], pigeons: ["layer"], chicks: ["starter", "grower"] }[id] || [];
+  if (feeds.length) box.append(feedCard(data, feeds));
 
   const recent = data.entries.filter((e) => (e.section || "farm") === id).slice(0, 8);
   const list = el('<div class="card stack"><h3>Recent entries</h3></div>');

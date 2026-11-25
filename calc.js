@@ -26,6 +26,33 @@ export function splitLayerFeed({ amount, chickens = 0, pigeons = 0, ducks = 0 })
   return { chickens: share(parts.chickens), ducks: share(parts.ducks), pigeons: share(parts.pigeons), totalWeight: total };
 }
 
+// Nov 25: how much feed each bird really eats, from the days between "Opened a feed bag" entries.
+// Layer feed is counted per chicken: a duck counts 1.5, a pigeon 1/3 (FEED_WEIGHT).
+// Typical grams per bird a day (mixed backyard birds; the bag label is the final word).
+export const FEED_TARGET = { starter: [10, 40], grower: [40, 90], layer: [100, 130] };
+
+export function feedHeads(feed, counts = {}) {
+  const h = headCounts(counts);
+  const ck = counts.chicks || {};
+  if (feed === "starter") return Number(ck.starter) || 0;
+  if (feed === "grower") return (Number(ck.grower) || 0) + (Number(ck.males) || 0) + (Number(ck.females) || 0);
+  const ducks = Number((counts.ducks || {}).count) || 0;
+  return round1(h.chickens * FEED_WEIGHT.chicken + ducks * FEED_WEIGHT.duck + h.pigeons * FEED_WEIGHT.pigeon);
+}
+
+export function feedRate({ entries = [], feed, bagKg = 0, heads = 0 }) {
+  const opens = entries.filter((e) => e.type === "openedFeed" && e.feed === feed).map((e) => String(e.date).slice(0, 10)).sort().slice(-5);
+  if (opens.length < 2) return { ready: false, opens: opens.length };
+  const span = (Date.parse(opens[opens.length - 1]) - Date.parse(opens[0])) / 86400000;
+  const daysPerBag = span / (opens.length - 1);
+  if (!(daysPerBag > 0) || !bagKg) return { ready: false, opens: opens.length };
+  const kgPerDay = bagKg / daysPerBag;
+  const perBird = heads ? Math.round((kgPerDay * 1000) / heads) : 0;
+  const [lo, hi] = FEED_TARGET[feed] || [0, Infinity];
+  const verdict = !heads ? null : perBird < lo ? "low" : perBird > hi ? "high" : "ok";
+  return { ready: true, opens: opens.length, daysPerBag: round1(daysPerBag), kgPerDay: round2(kgPerDay), perBird, heads, low: lo, high: hi, verdict };
+}
+
 // PLAN §4: RO water. Fig trees get the owner's %; the rest is split between all animals by head count.
 export function splitRO({ amount, figShare, heads = {} }) {
   const figs = round2((amount * (figShare || 0)) / 100);
