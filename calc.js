@@ -152,11 +152,30 @@ export function allocateShared({ entries = [], settings = {}, counts = {}, now =
 
   // Labour pool (salary + the house share of electricity), split by the labour %.
   // "other" and anything the boxes leave over stay under Farm general.
+  // Figs work is seasonal (Nov 25): the labour % for figs is for the busy months (cutting,
+  // fertilizer, picking). In other months figs get splits.labourFigsNormal and the rest goes
+  // back to the other boxes in proportion ("other" stays under Farm general).
+  const busy = Array.isArray(settings.figBusyMonths) ? settings.figBusyMonths.map(Number) : null;
+  const figNormal = splits.labourFigsNormal;
+  const pctFor = (month) => {
+    const p = {};
+    for (const k of Object.keys(lab)) p[k] = Number(lab[k]) || 0;
+    const m = Number(month.slice(5, 7));
+    if (busy && figNormal != null && figNormal !== "" && !busy.includes(m) && (p.figs || 0) > Number(figNormal)) {
+      const freed = (p.figs || 0) - Number(figNormal);
+      const others = Object.keys(p).filter((k) => k !== "figs");
+      const sum = others.reduce((a, k) => a + p[k], 0);
+      for (const k of others) p[k] += sum ? (freed * p[k]) / sum : 0;
+      p.figs = Number(figNormal);
+    }
+    return p;
+  };
   for (const [month, pool] of Object.entries(labourPool)) {
     if (!pool) continue;
     let used = 0;
+    const pct = pctFor(month);
     for (const key of ["chickens", "chicks", "pigeons", "rabbits", "figs", "tilapia"]) {
-      const amt = round2(pool * ((Number(lab[key]) || 0) / 100));
+      const amt = round2(pool * ((Number(pct[key]) || 0) / 100));
       if (amt > 0) { push(key, amt, month + "-01", "labour"); used += amt; }
     }
     push("farm", round2(pool - used), month + "-01", "labour:other");

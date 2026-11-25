@@ -983,10 +983,11 @@ view("settings", async () => {
       ["splits.labour.chicks", "Chicks"],
       ["splits.labour.pigeons", "Pigeons"],
       ["splits.labour.rabbits", "Rabbits"],
-      ["splits.labour.figs", "Figs"],
+      ["splits.labour.figs", "Figs (in the busy months)"],
       ["splits.labour.tilapia", "Fish pond"],
       ["splits.labour.other", "Other"],
     ], "Labour"],
+    ["Figs work by season", [["splits.labourFigsNormal", "Figs % in normal months (only watering)"]]],
     ["Margins %", [["margins.figs", "Figs"], ["margins.liveAnimals", "Live animals"]]],
     ["Local prices (AED)", [["localPrices.rooster.low", "Rooster low"], ["localPrices.rooster.high", "Rooster high"], ["localPrices.pigeon.low", "Pigeon low"], ["localPrices.pigeon.high", "Pigeon high"]]],
     ["Shop prices for home use", [["shopPrices.egg", "One egg"], ["shopPrices.figKg", "Fig per kg"], ["shopPrices.chicken", "One chicken"], ["shopPrices.pigeon", "One pigeon"], ["shopPrices.rabbit", "One rabbit"], ["shopPrices.tilapiaKg", "Tilapia per kg"]]],
@@ -1008,6 +1009,19 @@ view("settings", async () => {
       groupIns.push(inp);
     }
     if (warnLabel) form.append(pctWarn(warnLabel, groupIns));
+    if (title === "Figs work by season") {
+      // Busy fig months: cutting leaves, fertilizer, picking. Figs get the full labour % then.
+      form.append(el('<p class="hint">Busy fig months (cutting, fertilizer, picking). In these months figs get the full % above; in the others the rest goes back to the animals.</p>'));
+      const busySet = new Set((s.figBusyMonths || []).map(Number));
+      const months = el('<div class="seg" role="group" style="flex-wrap:wrap" id="figBusy"></div>');
+      ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].forEach((name, i) => {
+        const b = el(`<button type="button" data-m="${i + 1}">${name}</button>`);
+        b.setAttribute("aria-pressed", String(busySet.has(i + 1)));
+        b.addEventListener("click", () => b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true")));
+        months.append(b);
+      });
+      form.append(months);
+    }
   }
   const msg = el('<p class="hint" aria-live="polite"></p>');
   const save = el('<button class="btn primary block" type="submit">Save settings</button>');
@@ -1015,7 +1029,12 @@ view("settings", async () => {
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const next = JSON.parse(JSON.stringify(s));
-    for (const [path, inp] of inputs) setPath(next, path, Number(inp.value) || 0);
+    for (const [path, inp] of inputs) {
+      // An empty "normal months" box means "no season": figs keep the same % all year.
+      if (path === "splits.labourFigsNormal" && inp.value.trim() === "") { setPath(next, path, null); continue; }
+      setPath(next, path, Number(inp.value) || 0);
+    }
+    next.figBusyMonths = [...form.querySelectorAll("#figBusy [data-m]")].filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => Number(b.dataset.m));
     try {
       await store.saveSettings(next);
       toast("Settings saved");
