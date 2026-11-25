@@ -384,7 +384,15 @@ export function eggLog({ entries = [], counts = {} }) {
   return groups.map((g) => {
     const rows = entries.filter((e) => e.type === "eggs" && e.group === g);
     const total = rows.reduce((a, e) => a + (Number(e.eggs) || 0), 0);
-    const days = new Set(rows.map((e) => e.date)).size;
+    // An entry can cover several days ("collected over N days", saved up for the incubator):
+    // it covers its date and the N-1 days before it.
+    const covered = new Set();
+    for (const e of rows) {
+      const n = Math.max(1, Math.round(Number(e.days) || 1));
+      const end = Date.parse(String(e.date).slice(0, 10) + "T00:00:00Z");
+      for (let i = 0; i < n; i++) covered.add(isNaN(end) ? e.date + ":" + i : new Date(end - i * 86400000).toISOString().slice(0, 10));
+    }
+    const days = covered.size;
     const hens = Number((counts.groups && counts.groups[g] && counts.groups[g].hens) || 0);
     const perDay = days ? total / days : 0;
     return { group: g, eggs: total, days, perDay: round1(perDay), perHen: hens ? round1(perDay / hens) : 0, hens };

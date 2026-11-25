@@ -222,6 +222,7 @@ export const FORMS = {
   eggs: { title: "Eggs collected", icon: "egg", section: "chickens", fields: [
     { k: "group", l: "Which group", t: "seg", opts: GROUPS, req: true },
     { k: "eggs", l: "How many eggs", t: "number", req: true },
+    { k: "days", l: "Collected over how many days? (empty = today only)", t: "number" },
   ] },
   figs: { title: "Figs collected", icon: "fig", section: "figs", fields: [
     { k: "kg", l: "How many kg", t: "number", step: "0.1", req: true },
@@ -281,7 +282,7 @@ export function entryTitle(e) {
   const f = FORMS[e.type];
   const name = f ? f.title : e.type;
   switch (e.type) {
-    case "eggs": return name + ": " + e.eggs + " eggs, group " + e.group;
+    case "eggs": return name + ": " + e.eggs + " eggs, group " + e.group + (Number(e.days) > 1 ? ", over " + e.days + " days" : "");
     case "figs": return name + ": " + e.kg + " kg (" + optLabel(FORMS.figs.fields[1].opts, e.quality) + ")";
     case "born": return name + ": " + e.count + " " + optLabel(FORMS.born.fields[0].opts, e.kind).toLowerCase();
     case "moved": return name + ": " + optLabel(FORMS.moved.fields[0].opts, e.from) + " to " + optLabel(FORMS.moved.fields[1].opts, e.to) + (e.males || e.females ? ", " + (e.males || 0) + " male " + (e.females || 0) + " female" : "");
@@ -344,7 +345,10 @@ async function entryWarning(e) {
   if (e.type === "eggs") {
     let hens = 0;
     try { const s = await store.getSections(); hens = Number((((s.chickens || {}).groups || {})[e.group] || {}).hens) || 0; } catch (_) { /* offline: skip */ }
-    if (hens && e.eggs > hens) return `Group ${e.group} has ${hens} hen${hens === 1 ? "" : "s"}. ${e.eggs} eggs in one day is too many. Enter only today's eggs.`;
+    const d = Math.max(1, Number(e.days) || 1);
+    if (hens && e.eggs > hens * d) return d === 1
+      ? `Group ${e.group} has ${hens} hen${hens === 1 ? "" : "s"}. ${e.eggs} eggs in one day is too many. If you saved them up, fill in "over how many days".`
+      : `Group ${e.group} has ${hens} hen${hens === 1 ? "" : "s"}. ${e.eggs} eggs in ${d} days is too many. Is it right?`;
   }
   if (e.type === "incubatorBatch" && Number(e.eggs) > Number(e.incubator)) return `The ${e.incubator} incubator holds ${e.incubator} eggs, not ${e.eggs}.`;
   if (e.type === "sold" && n) {
@@ -1197,8 +1201,12 @@ view("incubators", async () => {
   const log =calc.eggLog({ entries: data.entries, counts: data.sections.chickens });
   const eggsPerDay = log.reduce((a, r) => a + r.perDay, 0);
   const layingHens = log.reduce((a, r) => a + r.hens, 0);
-  const perHen = calc.eggsPerHenPerDay({ eggsPerDay, hens: layingHens }) || 0.6;
-  const helper = calc.start400Helper({ target: sec.onHold || 400, days: 7, eggsPerDayNow: eggsPerDay, eggsPerHenPerDay: perHen || 0.6 });
+  // A hen lays at most about one egg a day: a higher figure means the egg entries are off
+  // (usually saved-up eggs entered as one day), so the helper falls back to 0.6 and says so.
+  const perHenRaw = calc.eggsPerHenPerDay({ eggsPerDay, hens: layingHens });
+  const eggsOff = perHenRaw > 1;
+  const perHen = eggsOff ? 0.6 : perHenRaw || 0.6;
+  const helper = calc.start400Helper({ target: sec.onHold || 400, days: 7, eggsPerDayNow: eggsOff ? layingHens * 0.6 : eggsPerDay, eggsPerHenPerDay: perHen });
   const electric = monthlyElectricity(data.entries) * ((data.settings.splits.electricity.incubator || 0) / 100);
 
   const box = el('<div class="stack"></div>');
@@ -1233,6 +1241,7 @@ view("incubators", async () => {
   help.append(el(`<p class="hint">To fill ${sec.onHold || 400} eggs in 7 days you need <strong>${helper.needed} eggs a day</strong>.</p>`));
   help.append(el(`<p class="hint">You collect about ${helper.now} a day now, so ${helper.more} more are needed.</p>`));
   help.append(el(`<p class="hint">That is about <strong>${helper.moreHens} more laying hens</strong> (at ${calc.round1(perHen || 0.6)} eggs per hen a day).</p>`));
+  if (eggsOff) help.append(el('<p class="hint"><span class="badge watch">check entries</span> The egg entries give more than one egg per hen a day, so 0.6 is used. If eggs were saved up, fix those entries with "over how many days".</p>'));
   box.append(help);
   return box;
 });
