@@ -552,6 +552,15 @@ async function loadAll() {
   const [settings, baseSections, entries] = await Promise.all([store.getSettings(), store.getSections(), store.listEntries()]);
   // Counts shown and used everywhere are live: the setup counts plus what was recorded since.
   const sections = calc.liveCounts({ sections: baseSections, entries, sinceMs: settings.countsAtMs });
+  // Eggs in the incubators now = batches set in the last 21 days (they hatch on day 21).
+  // Only when such a batch exists; otherwise the setup number stays.
+  const t = Date.parse(today() + "T00:00:00Z");
+  const active = entries.filter((e) => e.type === "incubatorBatch" && (t - Date.parse(e.date + "T00:00:00Z")) / 86400000 <= 21);
+  if (active.length && sections.incubators) {
+    const inc = (size) => active.filter((e) => String(e.incubator || "128") === size).reduce((a, e) => a + (Number(e.eggs) || 0), 0);
+    sections.incubators.running = inc("128");
+    if (inc("400")) sections.incubators.running400 = inc("400");
+  }
   return { settings, sections, baseSections, entries };
 }
 
@@ -723,7 +732,7 @@ function countLines(id, sec) {
   if (id === "rabbits") return ["Males: " + (sec.males || 0), "Females: " + (sec.females || 0), "Young: " + (sec.young || 0)];
   if (id === "tilapia") return ["Ponds: " + (sec.ponds || 0)];
   if (id === "figs") return ["Trees: " + (sec.trees || 0)];
-  if (id === "incubators") return ["Running: " + (sec.running || 0) + " eggs", "On hold: " + (sec.onHold || 0) + " eggs"];
+  if (id === "incubators") return ["128 incubator: " + (sec.running || 0) + " eggs in it now", "400 incubator: " + (sec.running400 ? sec.running400 + " eggs in it now" : "not in use (on hold)")];
   return [];
 }
 
@@ -1213,8 +1222,8 @@ view("incubators", async () => {
   box.append(el(`<div class="card"><div class="card-head"><a class="btn small quiet" href="#/home">${ICONS.back} Home</a></div><h2>Incubators</h2></div>`));
 
   const counts = el('<div class="card stack"><h3>Right now</h3></div>');
-  counts.append(el(`<p class="hint">Running: ${sec.running || 0} eggs</p>`));
-  counts.append(el(`<p class="hint">On hold: ${sec.onHold || 0} eggs</p>`));
+  counts.append(el(`<p class="hint">128 incubator: ${sec.running || 0} eggs in it now</p>`));
+  counts.append(el(`<p class="hint">400 incubator: ${sec.running400 ? sec.running400 + " eggs in it now" : "not in use (on hold)"}</p>`));
   counts.append(el(`<p class="hint">Electricity share this month: ${money(electric)}</p>`));
   box.append(counts);
 
