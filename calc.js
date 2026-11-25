@@ -145,6 +145,62 @@ export function allocateShared({ entries = [], settings = {}, counts = {}, now =
   return out;
 }
 
+// Live counts (Nov 25): the counts typed in the setup, moved on by every entry recorded after it.
+// Nothing is saved: the setup counts stay as they are, so fixing or deleting an entry fixes the count.
+// sinceMs = when the counts were last typed (settings.countsAtMs). Without it, the time the first
+// setup ran (its "spent before" entries) is used; with neither, every entry counts.
+export function liveCounts({ sections = {}, entries = [], sinceMs = null }) {
+  const out = JSON.parse(JSON.stringify(sections || {}));
+  const ms = (e) => Number(e.atMs) || new Date(e.at || 0).getTime() || 0;
+  let since = Number(sinceMs) || 0;
+  if (!since) {
+    const setupRows = entries.filter((e) => e.type === "spentBefore" || e.type === "oldSpend").map(ms).filter(Boolean);
+    since = setupRows.length ? Math.min(...setupRows) - 1 : 0;
+  }
+  const n = (v) => Math.max(0, Number(v) || 0);
+  const box = (id) => (out[id] = out[id] || {});
+  const add = (id, key, v) => { const b = box(id); b[key] = n(b[key]) + n(v); };
+  // Take v away, emptying the boxes in order (e.g. young first, then adults).
+  const take = (pairs, v) => {
+    let left = n(v);
+    for (const [obj, key] of pairs) {
+      if (!left || !obj) continue;
+      const have = n(obj[key]);
+      const used = Math.min(have, left);
+      obj[key] = have - used;
+      left -= used;
+    }
+  };
+  const ch = box("chicks"), pg = box("pigeons"), rb = box("rabbits");
+  const groups = (box("chickens").groups = box("chickens").groups || {});
+  const rows = entries.filter((e) => ms(e) > since).sort((a, b) => ms(a) - ms(b));
+  for (const e of rows) {
+    const count = n(e.count);
+    if (e.type === "born") {
+      if (e.kind === "chicks") add("chicks", "starter", count);
+      if (e.kind === "rabbits") add("rabbits", "young", count);
+      if (e.kind === "pigeons") add("pigeons", "young", count);
+    } else if (e.type === "moved") {
+      const males = n(e.males), females = n(e.females), moved = males + females;
+      const from = { starter: [ch, "starter"], grower: [ch, "grower"], youngPigeons: [pg, "young"] }[e.from];
+      if (from) take([from], moved);
+      if (e.to === "grower") add("chicks", "grower", moved);
+      if (e.to === "grown") { add("chicks", "males", males); add("chicks", "females", females); }
+      if (e.to === "flying") add("pigeons", "flying", moved);
+    } else if (e.type === "died") {
+      if (groups[e.what]) take([[groups[e.what], "hens"], [groups[e.what], "roosters"]], count);
+      if (e.what === "chicks") take([[ch, "starter"], [ch, "grower"], [ch, "males"], [ch, "females"]], count);
+      if (e.what === "pigeons") take([[pg, "young"], [pg, "flying"], [pg, "males"], [pg, "females"]], count);
+      if (e.what === "rabbits") take([[rb, "young"], [rb, "males"], [rb, "females"]], count);
+    } else if (e.type === "sold" || e.type === "home") {
+      if (e.what === "rooster" || e.what === "bird") take([[ch, "males"]], count);
+      if (e.what === "pigeon") take([[pg, "flying"], [pg, "young"]], count);
+      if (e.what === "rabbit") take([[rb, "young"], [rb, "males"], [rb, "females"]], count);
+    }
+  }
+  return out;
+}
+
 // PLAN §5: cost per unit = all costs of the section ÷ all units produced
 // (including those used at home, thrown away or died).
 export function costPerUnit({ costs = 0, units = 0 }) {
@@ -288,8 +344,9 @@ export function sectionStats({ entries = [], section, settings = {}, shopPrices 
   for (const [kind, n] of Object.entries(byKind)) {
     let denom = n;
     if (kind === "rooster") {
-      const raised = Number(counts && counts.males) || n;
-      denom = Math.max(0, raised - died);
+      // counts.males is the live count (liveCounts): males still here. Sold ones already left it
+      // and the dead ones are gone from both, so males raised and still alive = here + sold.
+      denom = (Number(counts && counts.males) || 0) + n;
     }
     costByKind[kind] = denom ? round2(costs / denom) : 0;
   }

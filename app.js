@@ -498,8 +498,10 @@ view("w/today", async () => {
 const HOME_PRICE_KEY = { eggs: "egg", figs: "figKg", bird: "chicken", pigeon: "pigeon", fish: "tilapiaKg", rabbit: "rabbit" };
 
 async function loadAll() {
-  const [settings, sections, entries] = await Promise.all([store.getSettings(), store.getSections(), store.listEntries()]);
-  return { settings, sections, entries };
+  const [settings, baseSections, entries] = await Promise.all([store.getSettings(), store.getSections(), store.listEntries()]);
+  // Counts shown and used everywhere are live: the setup counts plus what was recorded since.
+  const sections = calc.liveCounts({ sections: baseSections, entries, sinceMs: settings.countsAtMs });
+  return { settings, sections, baseSections, entries };
 }
 
 function homePrices(settings) {
@@ -887,7 +889,7 @@ view("settings", async () => {
   const tools = el('<div class="card stack"><h3>More</h3></div>');
   const salary = el('<button class="btn block" type="button">Salary this month</button>');
   salary.addEventListener("click", () => { location.hash = "#/salary"; });
-  const setup = el('<button class="btn block" type="button">Run the setup again</button>');
+  const setup = el('<button class="btn block" type="button">Correct the animal counts (setup)</button>');
   setup.addEventListener("click", () => { location.hash = "#/setup"; });
   tools.append(salary, setup);
   const excel = el('<button class="btn primary block" type="button">Download Excel</button>');
@@ -982,7 +984,8 @@ view("setup", async () => {
   const inputs = [];
   const addNum = (target, path, label, step = "any") => {
     const wrap = el('<div class="field"></div>');
-    const id = "w_" + path.replace(/\./g, "_");
+    let id = "w_" + path.replace(/\./g, "_");
+    if (inputs.some(([, , i]) => i.id === id)) id += "_" + inputs.length; // e.g. pigeon and rabbit "males"
     wrap.append(el(`<label for="${id}">${label}</label>`));
     const inp = el(`<input class="input" id="${id}" type="number" inputmode="decimal" min="0" step="${step}">`);
     inp.value = getPath(target, path) ?? "";
@@ -993,6 +996,7 @@ view("setup", async () => {
   };
 
   form.append(el("<h3>Animal counts</h3>"));
+  form.append(el('<p class="hint">These are today\'s counts. After you save, births, moves, deaths and sales change them by themselves. Come back here only to correct them.</p>'));
   for (const g of ["A", "B", "C"]) {
     addNum(sec.chickens, "groups." + g + ".roosters", "Group " + g + " roosters");
     addNum(sec.chickens, "groups." + g + ".hens", "Group " + g + " hens");
@@ -1000,6 +1004,11 @@ view("setup", async () => {
   addNum(sec.pigeons, "males", "Pigeon males");
   addNum(sec.pigeons, "females", "Pigeon females");
   addNum(sec.pigeons, "young", "Young pigeons");
+  addNum(sec.pigeons, "flying", "Flying (grown) pigeons for sale");
+  addNum(sec.chicks, "starter", "Chicks on starter feed");
+  addNum(sec.chicks, "grower", "Growing birds on grower feed");
+  addNum(sec.chicks, "males", "Grown young males (for sale)");
+  addNum(sec.chicks, "females", "Grown young females (not yet in a group)");
   addNum(sec.rabbits, "males", "Rabbit males");
   addNum(sec.rabbits, "females", "Rabbit females");
   addNum(sec.rabbits, "young", "Young rabbits");
@@ -1036,15 +1045,24 @@ view("setup", async () => {
 
   form.append(el("<h3>Spent before 22 Nov 2026</h3>"));
   form.append(el('<p class="hint">Kept apart and used only for payback. Leave 0 if nothing.</p>'));
+  // Running the setup again must never add the start-up money twice: a section that already
+  // has its "spent before" entry shows it instead of a box (change it in Entries if it is wrong).
   const spent = {};
   for (const [id, label] of [["chickens", "Chickens"], ["incubators", "Incubators"], ["pigeons", "Pigeons"], ["rabbits", "Rabbits"], ["tilapia", "Fish pond"], ["figs", "Figs"]]) {
+    const done = data.entries.filter((e) => e.type === "spentBefore" && e.section === id);
+    if (done.length) {
+      form.append(el(`<p class="hint">${label}: already entered, ${money(done.reduce((a, e) => a + (Number(e.amount) || 0), 0))}</p>`));
+      continue;
+    }
     spent[id] = 0;
     addNum(spent, id, "Spent on " + label, "0.01");
   }
   form.append(el("<h3>Old farm spending (not counted)</h3>"));
   form.append(el('<p class="hint">Greenhouses, generator, RO machine, pumps. Written down for your records only: never counted in profit, payback or your goal.</p>'));
   const old = { oldTotal: 0 };
-  addNum(old, "oldTotal", "Old farm equipment, total", "0.01");
+  const oldDone = data.entries.filter((e) => e.type === "oldSpend");
+  if (oldDone.length) form.append(el(`<p class="hint">Already entered, ${money(oldDone.reduce((a, e) => a + (Number(e.amount) || 0), 0))}. Add more from Add entry.</p>`));
+  else addNum(old, "oldTotal", "Old farm equipment, total", "0.01");
 
   const msg = el('<p class="hint" aria-live="polite"></p>');
   form.append(el('<button class="btn primary block" type="submit">Save and start</button>'), msg);
@@ -1052,6 +1070,7 @@ view("setup", async () => {
     ev.preventDefault();
     for (const [target, path, inp] of inputs) setPath(target, path, Number(inp.value) || 0);
     set.wizardDone = true;
+    set.countsAtMs = Date.now(); // the counts typed now are the new starting point for live counts
     try {
       await store.saveSections(sec);
       await store.saveSettings(set);
