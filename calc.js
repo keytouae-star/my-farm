@@ -482,7 +482,14 @@ export function reminders({ entries = [], settings = {}, now = new Date() }) {
     out.push({ kind, days, title, detail, due: days <= 0 });
   };
 
-  for (const b of entries.filter((e) => e.type === "incubatorBatch")) {
+  // Batches set the same day (one per group) get one reminder with their eggs added up.
+  const byDay = {};
+  for (const e of entries.filter((x) => x.type === "incubatorBatch")) {
+    const k = e.date;
+    byDay[k] = byDay[k] || { date: e.date, eggs: 0 };
+    byDay[k].eggs += Number(e.eggs) || 0;
+  }
+  for (const b of Object.values(byDay)) {
     const set = parse(b.date);
     for (const [label, day] of [["Candling", 7], ["Last turn", 18], ["Hatch", 21]]) {
       const left = daysTo(new Date(set.getTime() + day * dayMs));
